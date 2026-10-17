@@ -253,8 +253,10 @@ func (s *Service) ResetAdminPassword(ctx context.Context, pw string) error {
 	if err != nil {
 		return err
 	}
-	role, disabled := store.RoleAdmin, false
-	if err := s.Store.UpdateUser(ctx, u.ID, store.UserPatch{PasswordHash: &hash, Role: &role, Disabled: &disabled}); err != nil {
+	// The account is made local even if an AD user took the name, so the
+	// reset works while the directory is unreachable.
+	role, disabled, local := store.RoleAdmin, false, "local"
+	if err := s.Store.UpdateUser(ctx, u.ID, store.UserPatch{PasswordHash: &hash, Role: &role, Disabled: &disabled, Source: &local}); err != nil {
 		return err
 	}
 	if err := s.Store.RecordLoginSuccess(ctx, u.ID); err != nil {

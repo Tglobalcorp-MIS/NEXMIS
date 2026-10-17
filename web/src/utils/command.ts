@@ -28,6 +28,7 @@ export const editableKinds: CommandKind[] = [
   'notify',
   'service.restart',
   'process.kill',
+  'agent.update',
 ]
 
 /** helpdesk 只能派送的指令種類 */
@@ -122,6 +123,8 @@ export function commandSummary(c: { kind: CommandKind; args: Record<string, unkn
       return str('name')
     case 'process.kill':
       return str('name') || (a.pid ? `PID ${String(a.pid)}` : '')
+    case 'agent.update':
+      return str('version') ? `更新至 ${str('version')}` : ''
     case 'uninstall':
     case 'install':
       return str('name') || str('file_name')

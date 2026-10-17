@@ -132,6 +132,11 @@ func (s *Service) StartRemote(ctx context.Context, actor Actor, deviceID uuid.UU
 	if actor.ID == nil {
 		return nil, invalid("需要登入使用者")
 	}
+	if open, err := s.Store.HasOpenRemoteSession(ctx, deviceID); err != nil {
+		return nil, err
+	} else if open {
+		return nil, invalid("此裝置已有進行中的遠端連線，請待其結束後再試")
+	}
 	sess, err := s.Store.CreateRemoteSession(ctx, deviceID, in.Mode, *actor.ID, actor.Name, in.Reason)
 	if err != nil {
 		return nil, err

@@ -99,7 +99,10 @@ func (s *Store) Dashboard(ctx context.Context, batteryThreshold float64, warrant
 		return nil, err
 	}
 	rows, err = s.Pool.Query(ctx, `SELECT id, name, warranty_end FROM devices`+active+
-		` AND warranty_end IS NOT NULL AND warranty_end <= current_date + $1::int ORDER BY warranty_end LIMIT 20`, warrantyDays)
+		` AND warranty_end IS NOT NULL AND warranty_end <= current_date + $1::int`+
+		// Upcoming expirations first (soonest first), then already expired
+		// (most recent first), so old expirations cannot crowd them out.
+		` ORDER BY warranty_end < current_date, abs(warranty_end - current_date) LIMIT 20`, warrantyDays)
 	if err != nil {
 		return nil, err
 	}

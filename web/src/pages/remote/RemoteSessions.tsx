@@ -44,7 +44,7 @@ export default function RemoteSessions() {
           />
         </Flex>
         <RemoteSessionTable
-          data={status ? data?.items.filter((s) => s.status === status) : data?.items}
+          data={data?.items}
           loading={isFetching && !data}
           pagination={{
             current: page,

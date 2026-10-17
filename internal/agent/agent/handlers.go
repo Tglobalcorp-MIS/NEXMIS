@@ -86,13 +86,15 @@ func (a *Agent) onCommand(sc protocol.SignedCommand) {
 		}
 		return
 	}
-	a.send(protocol.TCommandAck, protocol.CommandAck{CommandID: c.CommandID, Accepted: true})
-	a.log.Info("executing command", "id", c.CommandID, "kind", c.Kind, "by", c.IssuedBy)
 	go func() {
 		// Power actions and long installs should not block quick commands,
-		// but the overall number of concurrent jobs is bounded.
+		// but the overall number of concurrent jobs is bounded. The ack is
+		// sent once a slot is free, since the server starts the command's
+		// timeout from it.
 		a.cmdSem <- struct{}{}
 		defer func() { <-a.cmdSem }()
+		a.send(protocol.TCommandAck, protocol.CommandAck{CommandID: c.CommandID, Accepted: true})
+		a.log.Info("executing command", "id", c.CommandID, "kind", c.Kind, "by", c.IssuedBy)
 		start := time.Now()
 		res := a.execute(a.life, c)
 		res.CommandID = c.CommandID

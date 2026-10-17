@@ -145,7 +145,14 @@ func (a *Agent) execute(ctx context.Context, c protocol.Command) protocol.Comman
 		if err := json.Unmarshal(c.Args, &args); err != nil {
 			return failed("參數錯誤：%v", err)
 		}
-		if err := a.selfUpdate(ctx, args.Version, protocol.AgentBuild{URL: args.DownloadURL, SHA256: args.SHA256}); err != nil {
+		if args.Version == a.opt.Version {
+			return ok("已是版本 " + args.Version)
+		}
+		build, found := args.Builds[a.platformKey()]
+		if !found {
+			return failed("伺服器沒有適用於 %s 的 Agent", a.platformKey())
+		}
+		if err := a.selfUpdate(ctx, args.Version, build); err != nil {
 			return failed("更新失敗：%v", err)
 		}
 		return ok("更新中，Agent 即將重新啟動")

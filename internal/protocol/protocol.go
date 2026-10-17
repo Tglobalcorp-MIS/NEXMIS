@@ -467,10 +467,10 @@ type ProcessArgs struct {
 	Name string `json:"name,omitempty"`
 }
 
+// AgentUpdateArgs carries a build per "GOOS/GOARCH"; the agent picks its own.
 type AgentUpdateArgs struct {
-	Version     string `json:"version"`
-	DownloadURL string `json:"download_url"`
-	SHA256      string `json:"sha256"`
+	Version string                `json:"version"`
+	Builds  map[string]AgentBuild `json:"builds,omitempty"`
 }
 
 type ScanArgs struct {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -56,10 +57,19 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 func validDeviceType(t string) bool { return slices.Contains(store.DeviceTypes, t) }
 
 func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
-	var in store.NewManualDevice
-	if !decode(w, r, &in) {
+	// The body carries the device itself plus optional asset fields
+	// (group, tags, asset tag, ...), which are applied as a patch.
+	var raw json.RawMessage
+	if !decode(w, r, &raw) {
 		return
 	}
+	var in store.NewManualDevice
+	var asset store.DevicePatch
+	if json.Unmarshal(raw, &in) != nil || json.Unmarshal(raw, &asset) != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "請求格式錯誤")
+		return
+	}
+	asset.Name, asset.DeviceType = nil, nil
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "請輸入裝置名稱")
@@ -71,6 +81,10 @@ func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.svc.Store.CreateManualDevice(r.Context(), in)
 	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.svc.Store.UpdateDevice(r.Context(), id, asset); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -457,7 +471,7 @@ func (s *Server) deviceRemoteSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, total, err := s.svc.Store.ListRemoteSessions(r.Context(), &id, page(r))
+	items, total, err := s.svc.Store.ListRemoteSessions(r.Context(), &id, "", page(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -466,7 +480,7 @@ func (s *Server) deviceRemoteSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listRemoteSessions(w http.ResponseWriter, r *http.Request) {
-	items, total, err := s.svc.Store.ListRemoteSessions(r.Context(), queryUUID(r, "device_id"), page(r))
+	items, total, err := s.svc.Store.ListRemoteSessions(r.Context(), queryUUID(r, "device_id"), r.URL.Query().Get("status"), page(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return

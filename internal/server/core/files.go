@@ -201,14 +201,20 @@ func (s *Service) applyAgentUpdate(cfg *protocol.AgentConfig, d *store.Device) {
 		return
 	}
 	cfg.LatestAgent = m.Version
-	cfg.AgentBuilds = map[string]protocol.AgentBuild{}
+	cfg.AgentBuilds = s.agentBuilds(m, d.ID, 7*24*time.Hour)
+}
+
+// agentBuilds mints per-device download links for every published build.
+func (s *Service) agentBuilds(m AgentManifest, deviceID uuid.UUID, ttl time.Duration) map[string]protocol.AgentBuild {
+	out := map[string]protocol.AgentBuild{}
 	for arch, b := range m.Builds {
-		cfg.AgentBuilds[arch] = protocol.AgentBuild{
-			URL:    s.fileURL(fileToken{Kind: "agent", Arch: arch, Device: d.ID, Expires: time.Now().Add(7 * 24 * time.Hour).Unix()}),
+		out[arch] = protocol.AgentBuild{
+			URL:    s.fileURL(fileToken{Kind: "agent", Arch: arch, Device: deviceID, Expires: time.Now().Add(ttl).Unix()}),
 			SHA256: b.SHA256,
 			Size:   b.Size,
 		}
 	}
+	return out
 }
 
 // AgentDir is where agent binaries are published.

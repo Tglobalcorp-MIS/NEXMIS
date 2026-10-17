@@ -64,7 +64,7 @@ docker compose start server
    systemd：以新版 `dist/` 重新執行 `install.sh`，然後 `systemctl restart nexmis-server`。
    Windows：停止服務 → 覆蓋執行檔與 `agent\` 資料夾 → 啟動服務。
 3. 資料庫結構於啟動時自動升級（具備鎖定，多實例同時啟動也安全）。結構升級只會前進，降版請以備份還原。
-4. 新版 Agent 隨伺服器發佈；`manifest.json` 的 `auto_update` 為 `true` 時，在線的 Agent 會自動下載、驗證 SHA-256 並更新。若要分批更新，可先將 `auto_update` 設為 `false`，再以「指令 → agent.update」對特定群組更新。
+4. 新版 Agent 隨伺服器發佈；`manifest.json` 的 `auto_update` 為 `true` 時，在線的 Agent 會自動下載、驗證 SHA-256 並更新。若要分批更新，可先將 `auto_update` 設為 `false`，再對特定裝置或群組派送「更新 Agent」指令（更新至伺服器目前發佈的版本）。
 5. 升級後至「系統設定 → 系統資訊」確認版本，並抽查數台 Agent 版本。
 
 ## 5. 日常監控

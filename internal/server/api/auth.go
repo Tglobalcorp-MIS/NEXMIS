@@ -61,6 +61,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := s.svc.Store.UserByUsername(ctx, in.Username)
+	if errors.Is(err, store.ErrNotFound) {
+		// AD users may sign in as DOMAIN\user or user@domain; the account
+		// is stored under its sAMAccountName.
+		if sam := ad.NormalizeUsername(in.Username); sam != in.Username {
+			user, err = s.svc.Store.UserByUsername(ctx, sam)
+		}
+	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.fail(w, r, err)
 		return

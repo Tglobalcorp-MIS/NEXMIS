@@ -200,9 +200,8 @@ func install(args []string) error {
 	if *pin != "" {
 		cfg.TLS.PinSHA256 = *pin
 	}
-	if *insecure {
-		cfg.TLS.InsecureSkipVerify = true
-	}
+	// Skipping verification is never carried over from an earlier install.
+	cfg.TLS.InsecureSkipVerify = *insecure
 	if err := cfg.Save(); err != nil {
 		return err
 	}

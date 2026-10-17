@@ -694,3 +694,21 @@ func TestDeploymentScheduleDiscovery(t *testing.T) {
 		t.Fatalf("imported storage device not listed: %d", list.Total)
 	}
 }
+
+func TestManualDeviceKeepsAssetFields(t *testing.T) {
+	e := setup(t)
+	e.login()
+	var d struct {
+		Name     string   `json:"name"`
+		Tags     []string `json:"tags"`
+		AssetTag string   `json:"asset_tag"`
+		Location string   `json:"location"`
+	}
+	body := map[string]any{"name": "PRN-3F", "device_type": "printer", "tags": []string{"三樓"}, "asset_tag": "A-001", "location": "3F 影印室"}
+	if code := e.do("POST", "/api/v1/devices", body, &d); code != 201 {
+		t.Fatalf("create: %d", code)
+	}
+	if d.Name != "PRN-3F" || d.AssetTag != "A-001" || d.Location != "3F 影印室" || len(d.Tags) != 1 {
+		t.Fatalf("asset fields lost: %+v", d)
+	}
+}

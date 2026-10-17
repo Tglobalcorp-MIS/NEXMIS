@@ -99,6 +99,7 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 
 // UserPatch carries optional user updates.
 type UserPatch struct {
+	Source       *string `json:"-"`
 	DisplayName  *string `json:"display_name"`
 	Email        *string `json:"email"`
 	Role         *string `json:"role"`
@@ -114,8 +115,9 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, p UserPatch) error
 		role = COALESCE($4, role),
 		disabled = COALESCE($5, disabled),
 		password_hash = COALESCE($6, password_hash),
+		source = COALESCE($7, source),
 		updated_at = now()
-		WHERE id = $1`, id, p.DisplayName, p.Email, p.Role, p.Disabled, p.PasswordHash)
+		WHERE id = $1`, id, p.DisplayName, p.Email, p.Role, p.Disabled, p.PasswordHash, p.Source)
 	if err != nil {
 		return mapErr(err)
 	}

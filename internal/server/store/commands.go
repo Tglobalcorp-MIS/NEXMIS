@@ -439,6 +439,15 @@ func scanRemote(row pgx.Row) (*RemoteSession, error) {
 	return &r, nil
 }
 
+// HasOpenRemoteSession reports whether the device has a pending or active
+// remote session; the helper serves one stream at a time.
+func (s *Store) HasOpenRemoteSession(ctx context.Context, deviceID uuid.UUID) (bool, error) {
+	var open bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM remote_sessions WHERE device_id = $1
+		AND status IN ('pending','active'))`, deviceID).Scan(&open)
+	return open, err
+}
+
 func (s *Store) CreateRemoteSession(ctx context.Context, deviceID uuid.UUID, mode string, by uuid.UUID, byName, reason string) (*RemoteSession, error) {
 	var id uuid.UUID
 	if err := s.Pool.QueryRow(ctx, `INSERT INTO remote_sessions (device_id, mode, status, requested_by, requester_name, reason)
@@ -453,10 +462,13 @@ func (s *Store) GetRemoteSession(ctx context.Context, id uuid.UUID) (*RemoteSess
 		WHERE r.id = $1`, id))
 }
 
-func (s *Store) ListRemoteSessions(ctx context.Context, deviceID *uuid.UUID, p Page) ([]RemoteSession, int, error) {
+func (s *Store) ListRemoteSessions(ctx context.Context, deviceID *uuid.UUID, status string, p Page) ([]RemoteSession, int, error) {
 	w := &whereBuilder{}
 	if deviceID != nil {
 		w.add("r.device_id = ?", *deviceID)
+	}
+	if status != "" {
+		w.add("r.status = ?", status)
 	}
 	var total int
 	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM remote_sessions r`+w.sql(), w.args...).Scan(&total); err != nil {

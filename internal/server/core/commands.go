@@ -34,12 +34,12 @@ func invalid(format string, a ...any) error { return &ValidationError{Msg: fmt.S
 var HelpdeskKinds = map[string]bool{protocol.CmdRefresh: true, protocol.CmdNotify: true, protocol.CmdLock: true}
 
 // adminKinds are kinds that may be issued through the generic command API.
-// install, agent.update and discovery.scan are created by their own
-// workflows only.
+// install and discovery.scan are created by their own workflows only.
 var adminKinds = map[string]bool{
 	protocol.CmdPowerShell: true, protocol.CmdCmd: true, protocol.CmdReboot: true, protocol.CmdShutdown: true,
 	protocol.CmdRefresh: true, protocol.CmdNotify: true, protocol.CmdLock: true, protocol.CmdLogoff: true,
 	protocol.CmdServiceRestart: true, protocol.CmdProcessKill: true, protocol.CmdUninstall: true,
+	protocol.CmdAgentUpdate: true,
 }
 
 const (
@@ -104,6 +104,15 @@ func (s *Service) normalize(ctx context.Context, nc NewCommand) (string, json.Ra
 		// its longest, with some slack for the result to arrive.
 		timeout = a.CountdownSec*(cfg.RebootMaxDefer+1) + cfg.RebootMaxDefer*protocol.MaxRebootDeferMinutes*60 + 600
 		args = a
+	case protocol.CmdAgentUpdate:
+		// Staged rollout: update selected devices to the published version
+		// while auto_update is off. Download links are minted per device
+		// at delivery.
+		m := s.agentManifest()
+		if m.Version == "" || len(m.Builds) == 0 {
+			return "", nil, 0, invalid("伺服器尚未發佈 Agent 版本")
+		}
+		args, _ = json.Marshal(protocol.AgentUpdateArgs{Version: m.Version})
 	case protocol.CmdNotify:
 		var a protocol.NotifyArgs
 		if err := json.Unmarshal(orEmpty(nc.Args), &a); err != nil || strings.TrimSpace(a.Message) == "" {
@@ -205,6 +214,13 @@ func (s *Service) sendCommand(ctx context.Context, cmd *store.Command, send func
 			pkgID, _ := uuid.Parse(a.PackageID)
 			a.DownloadURL = s.fileURL(fileToken{Kind: "pkg", ID: pkgID, Device: cmd.DeviceID,
 				Expires: time.Now().Add(time.Duration(cmd.TimeoutSec)*time.Second + 2*time.Hour).Unix()})
+			args, _ = json.Marshal(a)
+		}
+	}
+	if cmd.Kind == protocol.CmdAgentUpdate {
+		var a protocol.AgentUpdateArgs
+		if err := json.Unmarshal(args, &a); err == nil {
+			a.Builds = s.agentBuilds(s.agentManifest(), cmd.DeviceID, 24*time.Hour)
 			args, _ = json.Marshal(a)
 		}
 	}

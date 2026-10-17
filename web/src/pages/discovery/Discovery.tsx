@@ -106,7 +106,7 @@ function NewScanModal({ open, onClose, onCreated }: { open: boolean; onClose: ()
   }
   return (
     <Modal title="新增網段掃描" open={open} onCancel={onClose} onOk={() => void submit()} okText="開始掃描" confirmLoading={m.isPending} width={600} destroyOnHidden>
-      <Alert type="info" showIcon style={{ marginBottom: 16 }} title="掃描以 ICMP 與 TCP 常用埠探測，具速率限制，不會影響網路運作。" />
+      <Alert type="info" showIcon style={{ marginBottom: 16 }} title="掃描以 TCP 常用埠連線探測（不使用 ICMP，因此完全封鎖這些埠的設備不會出現），具速率限制，不會影響網路運作。" />
       <Form form={form} layout="vertical" preserve={false} initialValues={{ cidrs: [], ports: defaultPorts }}>
         <Form.Item
           label="網段（CIDR，可多個）"

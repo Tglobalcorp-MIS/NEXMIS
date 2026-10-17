@@ -517,9 +517,11 @@ func InstallCommand(ctx context.Context, path, typ, args string) (*exec.Cmd, err
 	case "exe":
 		cmd = exec.CommandContext(ctx, path, splitArgs(args)...)
 	case "msix":
+		// Provisioning installs for every user. Add-AppxPackage is not a
+		// fallback: run as SYSTEM it would register the app for SYSTEM only.
 		ps := fmt.Sprintf(
-			`$ErrorActionPreference='Stop'; try { Add-AppxProvisionedPackage -Online -PackagePath %q -SkipLicense | Out-Null } catch { Add-AppxPackage -Path %q }`,
-			path, path)
+			`$ErrorActionPreference='Stop'; Add-AppxProvisionedPackage -Online -PackagePath %q -SkipLicense | Out-Null`,
+			path)
 		cmd = exec.CommandContext(ctx, "powershell.exe",
 			"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 			"-Command", ps)
