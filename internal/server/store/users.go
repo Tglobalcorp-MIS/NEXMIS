@@ -198,6 +198,26 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID uuid.UUID, except
 	return err
 }
 
+// ADUsersWithSessions lists enabled AD-sourced users that hold at least one
+// unexpired session, for periodic re-validation against the directory.
+func (s *Store) ADUsersWithSessions(ctx context.Context) ([]User, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT `+userCols+` FROM users u WHERE source = 'ad' AND NOT disabled
+		AND EXISTS (SELECT 1 FROM sessions WHERE user_id = u.id AND expires_at > now()) ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) PurgeExpiredSessions(ctx context.Context) error {
 	_, err := s.Pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`)
 	return err

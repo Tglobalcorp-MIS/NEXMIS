@@ -225,6 +225,19 @@ func TestEndToEnd(t *testing.T) {
 	if !strings.Contains(tok.InstallCommand, tok.Token) {
 		t.Fatal("install command must contain the token")
 	}
+	if strings.Contains(tok.InstallCommand, "token="+tok.Token) {
+		t.Fatal("install command must not put the token in the URL")
+	}
+	// The installer endpoint takes the token from a header only. No agent
+	// binary is published in tests, so a valid token yields 404.
+	if r, _ := http.Get(e.srv.URL + "/api/agent/v1/installer?token=" + tok.Token); r.StatusCode != 403 {
+		t.Fatalf("installer with token in URL: %d", r.StatusCode)
+	}
+	ireq, _ := http.NewRequest("GET", e.srv.URL+"/api/agent/v1/installer", nil)
+	ireq.Header.Set("X-NEXMIS-Enroll-Token", tok.Token)
+	if r, _ := http.DefaultClient.Do(ireq); r.StatusCode != 404 {
+		t.Fatalf("installer with token header: %d", r.StatusCode)
+	}
 
 	// Invalid token is refused.
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)

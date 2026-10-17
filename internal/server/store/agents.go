@@ -322,6 +322,83 @@ func fmtBytes(b uint64) string {
 	return fmt.Sprintf("%.1f GB", float64(b)/gib)
 }
 
+// swKey identifies an installed application. The same product can be
+// installed for both architectures or per-machine and per-user at once, so
+// the name alone is not unique.
+type swKey struct{ name, arch, scope string }
+
+func (k swKey) label() string {
+	var tags []string
+	if k.arch != "" {
+		tags = append(tags, k.arch)
+	}
+	if k.scope == "user" {
+		tags = append(tags, "使用者")
+	}
+	if len(tags) == 0 {
+		return k.name
+	}
+	return k.name + " (" + strings.Join(tags, ", ") + ")"
+}
+
+// softwareChanges compares installed versions per application. A single
+// version replaced by another is a change; otherwise (side-by-side
+// versions) each version is reported as added or removed.
+func softwareChanges(old, cur map[swKey][]string) []InventoryChange {
+	var out []InventoryChange
+	keys := map[swKey]bool{}
+	for k := range old {
+		keys[k] = true
+	}
+	for k := range cur {
+		keys[k] = true
+	}
+	for k := range keys {
+		o, c := multisetDiff(old[k], cur[k])
+		switch {
+		case len(o) == 1 && len(c) == 1 && len(old[k]) == 1 && len(cur[k]) == 1:
+			out = append(out, InventoryChange{Change: "changed", Item: k.label(), Old: o[0], New: c[0]})
+		default:
+			for _, v := range c {
+				out = append(out, InventoryChange{Change: "added", Item: k.label(), New: v})
+			}
+			for _, v := range o {
+				out = append(out, InventoryChange{Change: "removed", Item: k.label(), Old: v})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Item != out[j].Item {
+			return out[i].Item < out[j].Item
+		}
+		return out[i].Change < out[j].Change
+	})
+	return out
+}
+
+// multisetDiff returns the values only in a and only in b, counting
+// duplicates.
+func multisetDiff(a, b []string) (onlyA, onlyB []string) {
+	n := map[string]int{}
+	for _, v := range a {
+		n[v]++
+	}
+	for _, v := range b {
+		if n[v] > 0 {
+			n[v]--
+		} else {
+			onlyB = append(onlyB, v)
+		}
+	}
+	for _, v := range a {
+		if n[v] > 0 {
+			n[v]--
+			onlyA = append(onlyA, v)
+		}
+	}
+	return onlyA, onlyB
+}
+
 // SaveSoftware replaces the software list and records added/removed/updated
 // applications. The very first inventory is not recorded as changes.
 func (s *Store) SaveSoftware(ctx context.Context, id uuid.UUID, inv protocol.Inventory) error {
@@ -330,49 +407,39 @@ func (s *Store) SaveSoftware(ctx context.Context, id uuid.UUID, inv protocol.Inv
 		return err
 	}
 	return s.InTx(ctx, func(tx pgx.Tx) error {
-		old := map[string]string{}
 		var hadPrevious bool
 		if err := tx.QueryRow(ctx, `SELECT true FROM device_inventory WHERE device_id = $1 AND kind = 'software'`, id).
 			Scan(&hadPrevious); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT name, version FROM device_software WHERE device_id = $1`, id)
+		old := map[swKey][]string{}
+		rows, err := tx.Query(ctx, `SELECT name, arch, scope, version FROM device_software WHERE device_id = $1`, id)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var n, v string
-			if err := rows.Scan(&n, &v); err != nil {
+			var k swKey
+			var v string
+			if err := rows.Scan(&k.name, &k.arch, &k.scope, &v); err != nil {
 				rows.Close()
 				return err
 			}
-			old[n] = v
+			old[k] = append(old[k], v)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		cur := map[string]string{}
+		cur := map[swKey][]string{}
 		for _, sw := range inv.Software {
-			cur[sw.Name] = sw.Version
+			k := swKey{sw.Name, sw.Arch, sw.Scope}
+			cur[k] = append(cur[k], sw.Version)
 		}
 		if hadPrevious {
 			batch := &pgx.Batch{}
-			add := func(change, item, o, n string) {
+			for _, c := range softwareChanges(old, cur) {
 				batch.Queue(`INSERT INTO inventory_changes (device_id, kind, change, item, old_value, new_value)
-					VALUES ($1,'software',$2,$3,$4,$5)`, id, change, item, o, n)
-			}
-			for n, v := range cur {
-				if ov, ok := old[n]; !ok {
-					add("added", n, "", v)
-				} else if ov != v {
-					add("changed", n, ov, v)
-				}
-			}
-			for n, v := range old {
-				if _, ok := cur[n]; !ok {
-					add("removed", n, v, "")
-				}
+					VALUES ($1,'software',$2,$3,$4,$5)`, id, c.Change, c.Item, c.Old, c.New)
 			}
 			if batch.Len() > 0 {
 				if err := tx.SendBatch(ctx, batch).Close(); err != nil {

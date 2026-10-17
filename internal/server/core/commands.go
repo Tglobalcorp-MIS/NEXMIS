@@ -187,10 +187,10 @@ func commandTTL(kind string) time.Duration {
 }
 
 // deliverCommand signs and sends a queued command if the device is online.
-func (s *Service) deliverCommand(ctx context.Context, cmd *store.Command) {
+func (s *Service) deliverCommand(ctx context.Context, cmd *store.Command) bool {
 	c := s.hub.get(cmd.DeviceID)
 	if c == nil {
-		return
+		return false
 	}
 	args := cmd.Args
 	if cmd.Kind == protocol.CmdInstall {
@@ -214,18 +214,19 @@ func (s *Service) deliverCommand(ctx context.Context, cmd *store.Command) {
 	})
 	if err != nil {
 		s.Log.Error("sign command", "err", err)
-		return
+		return false
 	}
 	if !s.hub.sendTo(cmd.DeviceID, protocol.TCommand, sc) {
-		return
+		return false
 	}
 	if err := s.Store.MarkCommandSent(ctx, cmd.ID); err != nil {
 		s.Log.Error("mark sent", "err", err)
-		return
+		return true
 	}
 	if updated, err := s.Store.GetCommand(ctx, cmd.ID); err == nil {
 		s.Bus.Publish(events.CommandUpdated, updated)
 	}
+	return true
 }
 
 // CancelCommand cancels a queued command.

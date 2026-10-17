@@ -68,7 +68,7 @@ func (a *Agent) onHelperMessage(env helperipc.Envelope) {
 			if sender == "" {
 				sender = a.host.User()
 			}
-			a.send(protocol.TChat, protocol.Chat{From: "user", Sender: sender, Body: m.Body, SentAt: time.Now().UTC()})
+			a.sendUserChat(protocol.Chat{From: "user", Sender: sender, Body: m.Body, SentAt: time.Now().UTC()})
 		}
 
 	case helperipc.TChatAck, helperipc.TChatRead:
@@ -96,5 +96,41 @@ func (a *Agent) onHelperMessage(env helperipc.Envelope) {
 		if err := sys.SendSAS(); err != nil {
 			a.log.Warn("SendSAS failed", "err", err)
 		}
+	}
+}
+
+// maxUserChatQueue bounds user messages held while the server is
+// unreachable.
+const maxUserChatQueue = 200
+
+// sendUserChat sends a message typed by the user, holding it in memory
+// while the agent is offline so it reaches MIS after reconnecting.
+func (a *Agent) sendUserChat(m protocol.Chat) {
+	a.pendingMu.Lock()
+	queued := len(a.chatOut) > 0
+	a.pendingMu.Unlock()
+	if !queued && a.connected.Load() && a.send(protocol.TChat, m) {
+		return
+	}
+	a.pendingMu.Lock()
+	if len(a.chatOut) < maxUserChatQueue {
+		a.chatOut = append(a.chatOut, m)
+	}
+	a.pendingMu.Unlock()
+	if a.connected.Load() {
+		a.flushUserChat()
+	}
+}
+
+// flushUserChat sends queued user messages in order, stopping at the
+// first one that cannot be sent.
+func (a *Agent) flushUserChat() {
+	a.pendingMu.Lock()
+	defer a.pendingMu.Unlock()
+	for len(a.chatOut) > 0 {
+		if !a.connected.Load() || !a.send(protocol.TChat, a.chatOut[0]) {
+			return
+		}
+		a.chatOut = a.chatOut[1:]
 	}
 }

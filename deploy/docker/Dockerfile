@@ -19,10 +19,11 @@ COPY --from=web /src/web/dist ./web/dist
 RUN SKIP_WEB=1 VERSION=${VERSION} OUT=/out scripts/build.sh
 
 FROM alpine:3.22
+ARG TARGETARCH
 RUN apk add --no-cache ca-certificates tzdata \
  && addgroup -S nexmis && adduser -S -G nexmis -h /var/lib/nexmis nexmis \
  && mkdir -p /var/lib/nexmis && chown nexmis:nexmis /var/lib/nexmis
-COPY --from=build /out/nexmis-server-linux-amd64 /usr/local/bin/nexmis-server
+COPY --from=build /out/nexmis-server-linux-${TARGETARCH} /usr/local/bin/nexmis-server
 COPY --from=build /out/agent /opt/nexmis/agent
 ENV NEXMIS_LISTEN=:8080 \
     NEXMIS_DATA_DIR=/var/lib/nexmis \

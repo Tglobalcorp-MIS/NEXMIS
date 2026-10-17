@@ -115,14 +115,17 @@ try {
     # then exposed to anyone on the network path.
     [NexmisTls]::Insecure = [bool]$Insecure -and -not ($PinSHA256 -or $CAFile)
     [Net.ServicePointManager]::ServerCertificateValidationCallback = [Net.Security.RemoteCertificateValidationCallback][NexmisTls]::Validate
-    $uri = "$Server/api/agent/v1/installer?arch=$arch&token=" + [uri]::EscapeDataString($Token)
+    # The token goes in a header so it never appears in proxy or access logs.
+    $uri = "$Server/api/agent/v1/installer?arch=$arch"
     Write-Log "下載 Agent（$arch）：$Server"
     $attempt = 0
     while ($true) {
       try {
         # WebClient goes through HttpWebRequest, which honours the validation
         # callback in both Windows PowerShell and PowerShell 7.
-        (New-Object Net.WebClient).DownloadFile($uri, $exe)
+        $wc = New-Object Net.WebClient
+        $wc.Headers.Add('X-NEXMIS-Enroll-Token', $Token)
+        $wc.DownloadFile($uri, $exe)
         break
       } catch {
         $attempt++

@@ -68,6 +68,7 @@ type Agent struct {
 	pendingMu  sync.Mutex
 	pendingRun map[string]chan json.RawMessage // helper round-trips by id
 	chatQueue  []protocol.Chat                 // MIS messages waiting for a helper
+	chatOut    []protocol.Chat                 // user messages waiting for the server
 	remote     map[string]protocol.RemoteRequest
 
 	cmdSem   chan struct{}
@@ -91,6 +92,11 @@ func New(opt Options, cfg *config.Config, log *slog.Logger, col collect.Collecto
 	}
 	def := protocol.DefaultAgentConfig()
 	a.acfg.Store(&def)
+	now := time.Now().UTC()
+	for _, id := range a.executed.Recover() {
+		a.outbox.Put(protocol.CommandResult{CommandID: id, Status: protocol.StatusFailed, ExitCode: -1,
+			Stderr: "Agent 在執行期間重新啟動，無法確認指令是否完成", StartedAt: now, FinishedAt: now})
+	}
 	return a, nil
 }
 
@@ -278,7 +284,10 @@ func (a *Agent) session(ctx context.Context) error {
 	go func() { errc <- a.reader(sctx, ws) }()
 
 	// Flush queued results, then report fresh state.
-	go a.flushOutbox()
+	go func() {
+		a.flushOutbox()
+		a.flushUserChat()
+	}()
 	a.requestRefresh("connect")
 
 	err = <-errc

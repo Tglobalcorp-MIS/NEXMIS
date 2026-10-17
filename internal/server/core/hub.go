@@ -39,6 +39,20 @@ type agentConn struct {
 
 // enqueue queues a frame without blocking; a full queue means the agent is
 // not keeping up and the connection is dropped (it will reconnect).
+// waitRoom blocks until the send buffer is at most half full, so a large
+// backlog is paced by the writer instead of overflowing the buffer (which
+// drops the connection). It returns false when the connection ends.
+func (c *agentConn) waitRoom() bool {
+	for len(c.send) > cap(c.send)/2 {
+		select {
+		case <-c.ctx.Done():
+			return false
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	return c.ctx.Err() == nil
+}
+
 func (c *agentConn) enqueue(b []byte) bool {
 	select {
 	case c.send <- b:
@@ -298,15 +312,21 @@ func (s *Service) flushPending(c *agentConn) {
 	if err != nil {
 		s.Log.Error("pending commands", "err", err)
 	}
+	// Stop at the first failure: the rest stays queued for the next
+	// connection rather than being pushed into a dead or full buffer.
 	for i := range cmds {
-		s.deliverCommand(ctx, &cmds[i])
+		if !c.waitRoom() || !s.deliverCommand(ctx, &cmds[i]) {
+			return
+		}
 	}
 	msgs, err := s.Store.UndeliveredChat(ctx, c.deviceID)
 	if err != nil {
 		s.Log.Error("undelivered chat", "err", err)
 	}
 	for _, m := range msgs {
-		s.hub.sendTo(c.deviceID, protocol.TChat, chatToProto(m))
+		if !c.waitRoom() || !s.hub.sendTo(c.deviceID, protocol.TChat, chatToProto(m)) {
+			return
+		}
 	}
 }
 

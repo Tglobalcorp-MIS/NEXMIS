@@ -27,8 +27,8 @@ type RoleMapping struct {
 // Settings is stored (with the password encrypted) in the settings table.
 type Settings struct {
 	Enabled            bool          `json:"enabled"`
-	URL                string        `json:"url"` // ldaps://dc01.corp.local:636 or ldap://...:389
-	StartTLS           bool          `json:"start_tls"`
+	URL                string        `json:"url"`       // ldaps://dc01.corp.local:636 or ldap://...:389
+	StartTLS           bool          `json:"start_tls"` // kept for stored settings; ldap:// always uses StartTLS
 	BaseDN             string        `json:"base_dn"`
 	BindDN             string        `json:"bind_dn"`
 	BindPassword       string        `json:"bind_password,omitempty"` // sealed at rest
@@ -71,7 +71,9 @@ func (s *Settings) dial() (*ldap.Conn, error) {
 		return nil, fmt.Errorf("無法連線至 %s：%w", s.URL, err)
 	}
 	conn.SetTimeout(searchTimeout)
-	if s.StartTLS && u.Scheme == "ldap" {
+	// Binds carry passwords, so plain ldap:// is always upgraded with
+	// StartTLS (failing closed if the DC does not offer it).
+	if u.Scheme == "ldap" {
 		if err := conn.StartTLS(tlsCfg); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("StartTLS 失敗：%w", err)
@@ -115,6 +117,48 @@ func NormalizeUsername(u string) string {
 	return u
 }
 
+// ErrUserNotFound means the account does not exist or is disabled in AD.
+var ErrUserNotFound = errors.New("user not found or disabled")
+
+// findUser looks up an enabled user by sAMAccountName.
+func (s *Settings) findUser(conn *ldap.Conn, sam string) (*ldap.Entry, error) {
+	base := s.UserBaseDN
+	if base == "" {
+		base = s.BaseDN
+	}
+	res, err := conn.Search(ldap.NewSearchRequest(base, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 0, false,
+		fmt.Sprintf("(&(objectCategory=person)(objectClass=user)(sAMAccountName=%s)"+
+			"(!(userAccountControl:1.2.840.113556.1.4.803:=2)))", ldap.EscapeFilter(sam)),
+		[]string{"dn", "sAMAccountName", "displayName", "mail"}, nil))
+	if err != nil {
+		return nil, fmt.Errorf("查詢使用者失敗：%w", err)
+	}
+	if len(res.Entries) != 1 {
+		return nil, ErrUserNotFound
+	}
+	return res.Entries[0], nil
+}
+
+// userInfo builds UserInfo for an entry, resolving nested group
+// membership on the DC (LDAP_MATCHING_RULE_IN_CHAIN).
+func (s *Settings) userInfo(conn *ldap.Conn, e *ldap.Entry) (*UserInfo, error) {
+	info := &UserInfo{
+		Username:    e.GetAttributeValue("sAMAccountName"),
+		DisplayName: e.GetAttributeValue("displayName"),
+		Email:       e.GetAttributeValue("mail"),
+	}
+	gres, err := conn.Search(ldap.NewSearchRequest(s.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1000, 0, false,
+		fmt.Sprintf("(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=%s))", ldap.EscapeFilter(e.DN)),
+		[]string{"dn"}, nil))
+	if err != nil {
+		return nil, fmt.Errorf("查詢群組失敗：%w", err)
+	}
+	for _, g := range gres.Entries {
+		info.Groups = append(info.Groups, g.DN)
+	}
+	return info, nil
+}
+
 // Authenticate looks the user up with the service account, then verifies
 // the password by binding as the user's DN.
 func (s *Settings) Authenticate(username, password string) (*UserInfo, error) {
@@ -129,21 +173,13 @@ func (s *Settings) Authenticate(username, password string) (*UserInfo, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	base := s.UserBaseDN
-	if base == "" {
-		base = s.BaseDN
-	}
-	res, err := conn.Search(ldap.NewSearchRequest(base, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 0, false,
-		fmt.Sprintf("(&(objectCategory=person)(objectClass=user)(sAMAccountName=%s)"+
-			"(!(userAccountControl:1.2.840.113556.1.4.803:=2)))", ldap.EscapeFilter(sam)),
-		[]string{"dn", "sAMAccountName", "displayName", "mail"}, nil))
-	if err != nil {
-		return nil, fmt.Errorf("查詢使用者失敗：%w", err)
-	}
-	if len(res.Entries) != 1 {
+	e, err := s.findUser(conn, sam)
+	if errors.Is(err, ErrUserNotFound) {
 		return nil, ErrInvalidCredentials
 	}
-	e := res.Entries[0]
+	if err != nil {
+		return nil, err
+	}
 	uc, err := s.dial()
 	if err != nil {
 		return nil, err
@@ -155,21 +191,23 @@ func (s *Settings) Authenticate(username, password string) (*UserInfo, error) {
 		}
 		return nil, err
 	}
-	info := &UserInfo{
-		Username:    e.GetAttributeValue("sAMAccountName"),
-		DisplayName: e.GetAttributeValue("displayName"),
-		Email:       e.GetAttributeValue("mail"),
+	return s.userInfo(conn, e)
+}
+
+// Lookup returns the current directory state of a user without a password,
+// for re-checking the authorization of signed-in AD users. It returns
+// ErrUserNotFound when the account is gone or disabled.
+func (s *Settings) Lookup(username string) (*UserInfo, error) {
+	conn, err := s.serviceConn()
+	if err != nil {
+		return nil, err
 	}
-	// LDAP_MATCHING_RULE_IN_CHAIN resolves nested group membership on the DC.
-	gres, err := conn.Search(ldap.NewSearchRequest(s.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1000, 0, false,
-		fmt.Sprintf("(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=%s))", ldap.EscapeFilter(e.DN)),
-		[]string{"dn"}, nil))
-	if err == nil {
-		for _, g := range gres.Entries {
-			info.Groups = append(info.Groups, g.DN)
-		}
+	defer conn.Close()
+	e, err := s.findUser(conn, NormalizeUsername(username))
+	if err != nil {
+		return nil, err
 	}
-	return info, nil
+	return s.userInfo(conn, e)
 }
 
 // RoleFor returns the most privileged role granted by the user's groups,

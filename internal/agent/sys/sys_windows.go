@@ -204,15 +204,21 @@ func StartTracked(cmd *exec.Cmd) (func(), error) {
 		return nil, err
 	}
 	// Assign the newly started process (and thus its children) to the job.
+	// If it cannot be tracked, stop it now: an untracked process would
+	// escape the timeout and outlive the reported failure.
+	abort := func(err error) (func(), error) {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		windows.CloseHandle(job)
+		return nil, err
+	}
 	ph, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
 	if err != nil {
-		windows.CloseHandle(job)
-		return nil, fmt.Errorf("OpenProcess: %w", err)
+		return abort(fmt.Errorf("OpenProcess: %w", err))
 	}
 	if err = windows.AssignProcessToJobObject(job, ph); err != nil {
 		windows.CloseHandle(ph)
-		windows.CloseHandle(job)
-		return nil, fmt.Errorf("AssignProcessToJobObject: %w", err)
+		return abort(fmt.Errorf("AssignProcessToJobObject: %w", err))
 	}
 	windows.CloseHandle(ph)
 	kill := func() {

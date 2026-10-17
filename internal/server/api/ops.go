@@ -751,7 +751,7 @@ func (s *Server) installCommand(token string) string {
 	return fmt.Sprintf(`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; `+
 		`[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; `+
 		`$p=Join-Path $env:TEMP 'nexmis-agent.exe'; `+
-		`Invoke-WebRequest -UseBasicParsing -Uri '%s/api/agent/v1/installer?token=%s' -OutFile $p; `+
+		`Invoke-WebRequest -UseBasicParsing -Uri '%s/api/agent/v1/installer' -Headers @{'X-NEXMIS-Enroll-Token'='%s'} -OutFile $p; `+
 		`& $p install --server '%s' --token '%s'"`, base, token, base, token)
 }
 
@@ -972,7 +972,14 @@ func (s *Server) publicInstaller(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many requests")
 		return
 	}
-	ok, err := s.svc.Store.EnrollmentTokenValid(r.Context(), secrets.HashToken(r.URL.Query().Get("token")))
+	// The token travels in a header, never the URL, so it does not end up in
+	// proxy or access logs.
+	tok := r.Header.Get("X-NEXMIS-Enroll-Token")
+	if tok == "" {
+		writeError(w, http.StatusForbidden, "forbidden", "invalid enrollment token")
+		return
+	}
+	ok, err := s.svc.Store.EnrollmentTokenValid(r.Context(), secrets.HashToken(tok))
 	if err != nil {
 		s.fail(w, r, err)
 		return

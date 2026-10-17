@@ -302,5 +302,5 @@ Cron 為標準 5 欄位（分 時 日 月 週），時區以伺服器設定的 `
 | WS | `/api/agent/v1/ws` | 控制通道 |
 | WS | `/api/agent/v1/remote/{session_id}?token=` | 使用者端助手的媒體通道 |
 | GET | `/api/agent/v1/files/{token}` | HMAC 簽章下載權杖（部署套件、Agent 更新），綁定裝置且有期限，支援 Range 續傳 |
-| GET | `/api/agent/v1/installer?token=&arch=` | 以有效註冊權杖下載 Agent 執行檔（不消耗權杖次數，限速），供 `install-agent.ps1` 與單行安裝指令使用 |
+| GET | `/api/agent/v1/installer?arch=` | 以 `X-NEXMIS-Enroll-Token` 標頭帶入有效註冊權杖（不放在網址，避免出現在代理或存取記錄）下載 Agent 執行檔（不消耗權杖次數，限速），供 `install-agent.ps1` 與單行安裝指令使用 |
 | GET | `/healthz` | 存活檢查（公開） |
