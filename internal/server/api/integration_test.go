@@ -219,6 +219,16 @@ func TestEndToEnd(t *testing.T) {
 		Token          string `json:"token"`
 		InstallCommand string `json:"install_command"`
 	}
+	// The test server is plain HTTP: no one-line installer is offered.
+	if code := e.do("POST", "/api/v1/enrollment-tokens", map[string]any{"name": "http"}, &tok); code != 201 || tok.InstallCommand != "" {
+		t.Fatalf("create token over http: %d %q", code, tok.InstallCommand)
+	}
+	var general map[string]any
+	e.do("GET", "/api/v1/settings/general", nil, &general)
+	general["server_url"] = "https://mis.example.test"
+	if code := e.do("PUT", "/api/v1/settings/general", general, nil); code >= 300 {
+		t.Fatalf("set server url: %d", code)
+	}
 	if code := e.do("POST", "/api/v1/enrollment-tokens", map[string]any{"name": "test", "tags": []string{"總部"}}, &tok); code != 201 {
 		t.Fatalf("create token: %d", code)
 	}

@@ -165,7 +165,7 @@ function CreatedTokenModal({ token, onClose }: { token: CreatedEnrollmentToken |
           <Typography.Paragraph copyable={{ text: token.token }} className="mono" style={{ fontSize: 15 }}>
             {token.token}
           </Typography.Paragraph>
-          {token.install_command && (
+          {token.install_command ? (
             <>
               <Typography.Title level={5}>
                 安裝指令（PowerShell，以系統管理員執行）{' '}
@@ -173,11 +173,18 @@ function CreatedTokenModal({ token, onClose }: { token: CreatedEnrollmentToken |
               </Typography.Title>
               <OutputBlock label="" text={token.install_command} />
             </>
+          ) : (
+            <Alert
+              type="info"
+              showIcon
+              title="伺服器網址不是 https://，Agent 會拒絕連線，因此不產生安裝指令。請到「系統設定 → 一般」設定 https 網址。"
+              style={{ marginBottom: 16 }}
+            />
           )}
           <Typography.Title level={5}>
-            MSI 靜默安裝（GPO／Intune） <Typography.Text copyable={{ text: `msiexec /i nexmis-agent.msi SERVER_URL=${server} ENROLL_TOKEN=${token.token} /qn` }} />
+            GPO 開機指令碼／Intune <Typography.Text copyable={{ text: `powershell -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Server ${server} -Token ${token.token}` }} />
           </Typography.Title>
-          <OutputBlock label="" text={`msiexec /i nexmis-agent.msi SERVER_URL=${server} ENROLL_TOKEN=${token.token} /qn`} />
+          <OutputBlock label="" text={`powershell -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Server ${server} -Token ${token.token}`} />
           <Typography.Title level={5}>
             執行檔安裝 <Typography.Text copyable={{ text: `nexmis-agent.exe install --server ${server} --token ${token.token}` }} />
           </Typography.Title>
