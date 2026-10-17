@@ -33,6 +33,9 @@ const (
 	TCommand       = "command"        // server -> agent (signed)
 	TCommandAck    = "command.ack"    // agent  -> server
 	TCommandResult = "command.result" // agent  -> server
+	// TCommandResultAck confirms a stored result (ref = the result's
+	// envelope id); until then the agent keeps the result and resends it.
+	TCommandResultAck = "command.result.ack" // server -> agent
 
 	// Chat
 	TChat     = "chat"      // both directions

@@ -24,6 +24,7 @@ import (
 	"github.com/tglobalcorp-mis/nexmis/internal/server/ad"
 	"github.com/tglobalcorp-mis/nexmis/internal/server/auth"
 	"github.com/tglobalcorp-mis/nexmis/internal/server/core"
+	"github.com/tglobalcorp-mis/nexmis/internal/server/events"
 	"github.com/tglobalcorp-mis/nexmis/internal/server/secrets"
 	"github.com/tglobalcorp-mis/nexmis/internal/server/store"
 )
@@ -42,6 +43,9 @@ func (s *Server) eventsWS(w http.ResponseWriter, r *http.Request) {
 	defer ws.CloseNow()
 	ch, cancel := s.svc.Bus.Subscribe()
 	defer cancel()
+	// Chat and remote-session data are helpdesk-only over REST; keep the
+	// live feed consistent with that.
+	helpdeskEvents := store.RoleRank(userFrom(r).Role) >= store.RoleRank(store.RoleHelpdesk)
 	ctx := ws.CloseRead(r.Context())
 	ping := time.NewTicker(30 * time.Second)
 	defer ping.Stop()
@@ -52,6 +56,9 @@ func (s *Server) eventsWS(w http.ResponseWriter, r *http.Request) {
 		case ev, ok := <-ch:
 			if !ok {
 				return
+			}
+			if !helpdeskEvents && (ev.Type == events.ChatMessage || ev.Type == events.RemoteUpdated) {
+				continue
 			}
 			b, _ := json.Marshal(ev)
 			wctx, c := context.WithTimeout(ctx, 10*time.Second)
@@ -885,6 +892,18 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.svc.Store.UpdateUser(r.Context(), id, p); err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	// A password reset is how a compromised account is recovered, so it
+	// must also end the sessions opened with the old password.
+	if p.PasswordHash != nil {
+		keep := ""
+		if c, err := r.Cookie(sessionCookie); err == nil && me.ID == id {
+			keep = secrets.HashToken(c.Value)
+		}
+		if err := s.svc.Store.DeleteUserSessions(r.Context(), id, keep); err != nil {
+			s.fail(w, r, err)
+			return
+		}
 	}
 	logged := p
 	logged.Password, logged.PasswordHash = nil, nil

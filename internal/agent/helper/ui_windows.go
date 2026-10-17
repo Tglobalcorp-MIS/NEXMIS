@@ -35,11 +35,11 @@ type ui struct {
 	onChatSend  func(body string)
 	sendIPC     func(t, id string, p any) error
 
-	chatHwnd   uintptr
-	bannerHwnd uintptr
-	chatLog    []chatLine
-	lastChatID string
-	chatMu     sync.Mutex
+	chatHwnd      uintptr
+	bannerHwnd    uintptr
+	chatLog       []chatLine
+	unreadChatIDs []string // MIS messages not yet shown in the open chat window
+	chatMu        sync.Mutex
 }
 
 type chatLine struct {

@@ -51,6 +51,9 @@ type Agent struct {
 	acfg     atomic.Pointer[protocol.AgentConfig]
 	executed *executedLog
 	outbox   *outbox
+	// life is the Run context. Accepted commands run under it, not under a
+	// connection's context, so a reconnect does not abort them.
+	life context.Context
 
 	connMu sync.Mutex
 	conn   *websocket.Conn
@@ -67,8 +70,8 @@ type Agent struct {
 	chatQueue  []protocol.Chat                 // MIS messages waiting for a helper
 	remote     map[string]protocol.RemoteRequest
 
-	cmdSem     chan struct{}
-	updateOnce sync.Once
+	cmdSem   chan struct{}
+	updating atomic.Bool // a self-update loop is running
 }
 
 func New(opt Options, cfg *config.Config, log *slog.Logger, col collect.Collector, host helperhost.Host) (*Agent, error) {
@@ -95,6 +98,7 @@ func (a *Agent) config() protocol.AgentConfig { return *a.acfg.Load() }
 
 // Run blocks until ctx is canceled.
 func (a *Agent) Run(ctx context.Context) error {
+	a.life = ctx
 	if !a.cfg.Enrolled() {
 		if err := a.enrollLoop(ctx); err != nil {
 			return err
@@ -178,9 +182,19 @@ func (a *Agent) enroll(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("identity: %w", err)
 	}
-	pub, err := a.cfg.NewKey()
-	if err != nil {
-		return err
+	// Reuse the key of an earlier attempt whose response was lost: the
+	// server recognises machine id + key as a retry and does not consume
+	// another token use. The key is saved before the request for that.
+	var pub ed25519.PublicKey
+	if k := a.cfg.Key(); k != nil {
+		pub = k.Public().(ed25519.PublicKey)
+	} else {
+		if pub, err = a.cfg.NewKey(); err != nil {
+			return err
+		}
+		if err := a.cfg.Save(); err != nil {
+			return err
+		}
 	}
 	body, _ := json.Marshal(protocol.EnrollRequest{
 		Token: a.cfg.EnrollToken, MachineID: id.MachineID, Hostname: id.Hostname, Domain: id.Domain,
@@ -251,6 +265,8 @@ func (a *Agent) session(ctx context.Context) error {
 	a.sendHelperStatus()
 	defer func() {
 		a.connected.Store(false)
+		// Unacked results are resent on the next connection.
+		a.outbox.ResetInFlight()
 		a.connMu.Lock()
 		a.conn, a.sendCh = nil, nil
 		a.connMu.Unlock()
@@ -371,7 +387,11 @@ func (a *Agent) reader(ctx context.Context, ws *websocket.Conn) error {
 // send queues a message for the server. It returns false when offline or
 // when the queue is full.
 func (a *Agent) send(t string, payload any) bool {
-	env, err := protocol.NewEnvelope(t, uuid.NewString(), "", payload)
+	return a.sendID(t, uuid.NewString(), payload)
+}
+
+func (a *Agent) sendID(t, id string, payload any) bool {
+	env, err := protocol.NewEnvelope(t, id, "", payload)
 	if err != nil {
 		return false
 	}
@@ -401,15 +421,28 @@ func (a *Agent) sendResult(r protocol.CommandResult) {
 
 var flushMu sync.Mutex
 
+// flushOutbox sends persisted results that are not already awaiting the
+// server's ack. Each result is sent with its outbox entry name as envelope
+// id; the entry is removed only when the server acks it (onResultAck), so
+// a result is never lost to a dropped connection or a reboot.
 func (a *Agent) flushOutbox() {
 	flushMu.Lock()
 	defer flushMu.Unlock()
 	names, results := a.outbox.Pending()
 	for i, r := range results {
-		if !a.connected.Load() || !a.send(protocol.TCommandResult, r) {
+		if a.outbox.InFlight(names[i]) {
+			continue
+		}
+		if !a.connected.Load() || !a.sendID(protocol.TCommandResult, names[i], r) {
 			return
 		}
-		a.outbox.Done(names[i])
+		a.outbox.SetInFlight(names[i])
+	}
+}
+
+func (a *Agent) onResultAck(ref string) {
+	if ref != "" {
+		a.outbox.Done(ref)
 	}
 }
 

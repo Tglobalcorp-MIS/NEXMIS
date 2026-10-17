@@ -64,8 +64,9 @@ func (l *executedLog) Claim(id string) bool {
 // outbox persists command results until the server has them, so results
 // survive disconnects and the reboot a command itself triggered.
 type outbox struct {
-	mu  sync.Mutex
-	dir string
+	mu       sync.Mutex
+	dir      string
+	inflight map[string]bool // entry names sent on this connection, awaiting ack
 }
 
 const outboxMax = 500
@@ -122,7 +123,32 @@ func (o *outbox) Pending() ([]string, []protocol.CommandResult) {
 func (o *outbox) Done(name string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	_ = os.Remove(filepath.Join(o.dir, filepath.Base(name)))
+	name = filepath.Base(name)
+	delete(o.inflight, name)
+	_ = os.Remove(filepath.Join(o.dir, name))
+}
+
+// InFlight reports whether the entry was sent on the current connection
+// and awaits the server's ack.
+func (o *outbox) InFlight(name string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.inflight[name]
+}
+
+func (o *outbox) SetInFlight(name string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.inflight == nil {
+		o.inflight = map[string]bool{}
+	}
+	o.inflight[name] = true
+}
+
+func (o *outbox) ResetInFlight() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.inflight = nil
 }
 
 func safeName(s string) string {

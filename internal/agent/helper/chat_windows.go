@@ -68,6 +68,10 @@ func (u *ui) handleIncomingChat(cm helperipc.ChatMessage) {
 		_ = u.sendIPC(helperipc.TChatAck, "", helperipc.IDs{IDs: []string{cm.MessageID}})
 	}
 
+	// Track it as unread until the user has the chat window open.
+	if !cm.FromUser && cm.MessageID != "" {
+		u.unreadChatIDs = append(u.unreadChatIDs, cm.MessageID)
+	}
 	if u.chatHwnd != 0 {
 		u.renderChatLog()
 		u.markChatRead()
@@ -75,17 +79,14 @@ func (u *ui) handleIncomingChat(cm helperipc.ChatMessage) {
 		// Not open: nudge without stealing focus.
 		u.showBalloon("MIS 訊息", cm.Body, "info")
 	}
-	// Remember the last unread id for a later read receipt if needed.
-	if !cm.FromUser {
-		u.lastChatID = cm.MessageID
-	}
 }
 
-// markChatRead sends a read receipt for the most recent MIS message.
+// markChatRead sends a read receipt for every MIS message shown since the
+// last receipt.
 func (u *ui) markChatRead() {
-	if u.sendIPC != nil && u.lastChatID != "" {
-		_ = u.sendIPC(helperipc.TChatRead, "", helperipc.IDs{IDs: []string{u.lastChatID}})
-		u.lastChatID = ""
+	if u.sendIPC != nil && len(u.unreadChatIDs) > 0 {
+		_ = u.sendIPC(helperipc.TChatRead, "", helperipc.IDs{IDs: u.unreadChatIDs})
+		u.unreadChatIDs = nil
 	}
 }
 

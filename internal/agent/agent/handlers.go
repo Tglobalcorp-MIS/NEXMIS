@@ -20,7 +20,7 @@ func (a *Agent) handle(ctx context.Context, env protocol.Envelope) {
 	case protocol.TCommand:
 		var sc protocol.SignedCommand
 		if env.Decode(&sc) == nil {
-			a.onCommand(ctx, sc)
+			a.onCommand(sc)
 		}
 	case protocol.TInventoryRequest:
 		var r protocol.InventoryRequest
@@ -53,6 +53,8 @@ func (a *Agent) handle(ctx context.Context, env protocol.Envelope) {
 			a.pendingMu.Unlock()
 			_ = a.host.Send(helperipc.TRemoteStop, "", helperipc.RemoteStop{SessionID: rs.SessionID, Reason: rs.Reason})
 		}
+	case protocol.TCommandResultAck:
+		a.onResultAck(env.Ref)
 	case protocol.TPing:
 		a.send(protocol.TPong, nil)
 	}
@@ -71,7 +73,7 @@ func (a *Agent) verify(sc protocol.SignedCommand) (protocol.Command, string) {
 	return c, ""
 }
 
-func (a *Agent) onCommand(ctx context.Context, sc protocol.SignedCommand) {
+func (a *Agent) onCommand(sc protocol.SignedCommand) {
 	c, reason := a.verify(sc)
 	if reason == "duplicate" {
 		// Already executed (or running); the result is in the outbox.
@@ -92,7 +94,7 @@ func (a *Agent) onCommand(ctx context.Context, sc protocol.SignedCommand) {
 		a.cmdSem <- struct{}{}
 		defer func() { <-a.cmdSem }()
 		start := time.Now()
-		res := a.execute(ctx, c)
+		res := a.execute(a.life, c)
 		res.CommandID = c.CommandID
 		if res.StartedAt.IsZero() {
 			res.StartedAt = start

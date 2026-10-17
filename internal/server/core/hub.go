@@ -96,11 +96,16 @@ func (h *hub) unregister(c *agentConn) bool {
 // sendTo marshals and queues a message for a device. It reports false when
 // the device is not connected.
 func (h *hub) sendTo(deviceID uuid.UUID, typ string, payload any) bool {
+	return h.sendRef(deviceID, typ, "", payload)
+}
+
+// sendRef is sendTo for a reply to the agent message with id ref.
+func (h *hub) sendRef(deviceID uuid.UUID, typ, ref string, payload any) bool {
 	c := h.get(deviceID)
 	if c == nil {
 		return false
 	}
-	env, err := protocol.NewEnvelope(typ, uuid.NewString(), "", payload)
+	env, err := protocol.NewEnvelope(typ, uuid.NewString(), ref, payload)
 	if err != nil {
 		return false
 	}
@@ -389,11 +394,14 @@ func (s *Service) handleAgentMessage(c *agentConn, env protocol.Envelope) error 
 		}
 		cmd, err := s.Store.ApplyResult(ctx, c.deviceID, r)
 		if errors.Is(err, store.ErrNotFound) {
-			return nil // duplicate result after reconnect
+			// Duplicate after a lost ack, or a command finished meanwhile.
+			s.hub.sendRef(c.deviceID, protocol.TCommandResultAck, env.ID, nil)
+			return nil
 		}
 		if err != nil {
 			return err
 		}
+		s.hub.sendRef(c.deviceID, protocol.TCommandResultAck, env.ID, nil)
 		s.Bus.Publish(events.CommandUpdated, cmd)
 		s.onCommandFinished(ctx, cmd)
 

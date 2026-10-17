@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/robfig/cron/v3"
 
 	"github.com/tglobalcorp-mis/nexmis/internal/discovery"
@@ -118,23 +120,21 @@ func (s *Service) CreateDeployment(ctx context.Context, actor Actor, in Deployme
 	if strings.TrimSpace(in.Name) == "" {
 		in.Name = "部署 " + pkg.Name + " " + pkg.Version
 	}
-	if actor.ID == nil {
-		return nil, invalid("需要登入使用者")
+	// Every deployment starts scheduled; an immediate one is claimed right
+	// away below, and the job loop picks it up if that is interrupted.
+	runNow := in.ScheduledAt == nil || !in.ScheduledAt.After(time.Now().Add(30*time.Second))
+	if runNow {
+		now := time.Now()
+		in.ScheduledAt = &now
 	}
-	status := "running"
-	if in.ScheduledAt != nil && in.ScheduledAt.After(time.Now().Add(30*time.Second)) {
-		status = "scheduled"
-	} else {
-		in.ScheduledAt = nil
-	}
-	id, err := s.Store.CreateDeployment(ctx, in.Name, pkg.ID, in.Target, status, in.ScheduledAt, *actor.ID)
+	id, err := s.Store.CreateDeployment(ctx, in.Name, pkg.ID, in.Target, "scheduled", in.ScheduledAt, actor.ID)
 	if err != nil {
 		return nil, err
 	}
 	s.Audit(ctx, actor, "deployment.create", "deployment", id.String(), in.Name,
 		map[string]any{"package": pkg.Name + " " + pkg.Version, "sha256": pkg.SHA256, "target": in.Target, "scheduled_at": in.ScheduledAt}, true)
-	if status == "running" {
-		if err := s.runDeployment(ctx, actor, id, nil); err != nil {
+	if runNow {
+		if err := s.runDeployment(ctx, actor, id, nil, true); err != nil {
 			return nil, err
 		}
 	}
@@ -146,13 +146,19 @@ func (s *Service) CreateDeployment(ctx context.Context, actor Actor, in Deployme
 }
 
 // runDeployment queues install commands for the deployment target, or for
-// onlyDevices when retrying.
-func (s *Service) runDeployment(ctx context.Context, actor Actor, id uuid.UUID, onlyDevices []uuid.UUID) error {
+// onlyDevices when retrying. With claim set it first moves a scheduled
+// deployment to running; claiming and queueing happen in one transaction.
+func (s *Service) runDeployment(ctx context.Context, actor Actor, id uuid.UUID, onlyDevices []uuid.UUID, claim bool) error {
 	dep, err := s.Store.GetDeployment(ctx, id)
 	if err != nil {
 		return err
 	}
 	pkg, err := s.Store.GetPackage(ctx, dep.PackageID)
+	if errors.Is(err, store.ErrNotFound) && claim {
+		// The package was deleted while the deployment waited; it can never run.
+		s.Log.Warn("deployment package no longer exists; canceling", "deployment", id)
+		return s.Store.SetDeploymentStatus(ctx, nil, id, "canceled")
+	}
 	if err != nil {
 		return err
 	}
@@ -170,29 +176,46 @@ func (s *Service) runDeployment(ctx context.Context, actor Actor, id uuid.UUID, 
 		PackageID: pkg.ID.String(), FileName: pkg.FileName, SHA256: pkg.SHA256, Size: pkg.FileSize, Type: pkg.Type,
 		Arguments: pkg.InstallArgs, SuccessCodes: codes, DeploymentID: id.String(),
 	})
-	for _, devID := range devices {
-		cmd, err := s.Store.CreateCommand(ctx, nil, store.NewCommandRow{
-			DeviceID: devID, Kind: protocol.CmdInstall, Args: args, TimeoutSec: 3600, TTL: commandTTL(protocol.CmdInstall),
-			IssuedBy: actor.ID, IssuedByName: actor.Name, DeploymentID: &id,
-		})
-		if err != nil {
-			s.Log.Error("queue install", "device", devID, "err", err)
-			continue
+	var queued []*store.Command
+	err = s.Store.InTx(ctx, func(tx pgx.Tx) error {
+		queued = queued[:0]
+		if claim {
+			ok, err := s.Store.ClaimDeployment(ctx, tx, id)
+			if err != nil || !ok {
+				return err
+			}
 		}
+		for _, devID := range devices {
+			cmd, err := s.Store.CreateCommand(ctx, tx, store.NewCommandRow{
+				DeviceID: devID, Kind: protocol.CmdInstall, Args: args, TimeoutSec: 3600, TTL: commandTTL(protocol.CmdInstall),
+				IssuedBy: actor.ID, IssuedByName: actor.Name, DeploymentID: &id,
+			})
+			if err != nil {
+				return fmt.Errorf("queue install for %s: %w", devID, err)
+			}
+			queued = append(queued, cmd)
+		}
+		status := "running"
+		if len(devices) == 0 {
+			status = "completed"
+		}
+		return s.Store.SetDeploymentStatus(ctx, tx, id, status)
+	})
+	if err != nil {
+		return err
+	}
+	for _, cmd := range queued {
 		s.Bus.Publish(events.CommandUpdated, cmd)
 		s.deliverCommand(ctx, cmd)
 	}
-	if len(devices) == 0 {
-		return s.Store.SetDeploymentStatus(ctx, id, "completed")
-	}
-	return s.Store.SetDeploymentStatus(ctx, id, "running")
+	return nil
 }
 
 func (s *Service) CancelDeployment(ctx context.Context, actor Actor, id uuid.UUID) (*store.Deployment, error) {
 	if err := s.Store.CancelDeploymentCommands(ctx, id); err != nil {
 		return nil, err
 	}
-	if err := s.Store.SetDeploymentStatus(ctx, id, "canceled"); err != nil {
+	if err := s.Store.SetDeploymentStatus(ctx, nil, id, "canceled"); err != nil {
 		return nil, err
 	}
 	d, err := s.Store.GetDeployment(ctx, id)
@@ -212,7 +235,7 @@ func (s *Service) RetryDeployment(ctx context.Context, actor Actor, id uuid.UUID
 	if len(failed) == 0 {
 		return nil, invalid("沒有失敗的目標需要重試")
 	}
-	if err := s.runDeployment(ctx, actor, id, failed); err != nil {
+	if err := s.runDeployment(ctx, actor, id, failed, false); err != nil {
 		return nil, err
 	}
 	d, err := s.Store.GetDeployment(ctx, id)
@@ -300,7 +323,9 @@ func (s *Service) RunSchedule(ctx context.Context, actor Actor, sc store.Schedul
 			}
 		}
 	case "deployment":
-		if sc.Action.PackageID == nil || sc.CreatedBy == nil {
+		// sc.CreatedBy may be nil once the creating user is deleted; the
+		// deployment then runs under the schedule's name alone.
+		if sc.Action.PackageID == nil {
 			return errors.New("invalid deployment schedule")
 		}
 		_, err := s.CreateDeployment(ctx, runAs, DeploymentInput{

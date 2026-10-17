@@ -57,17 +57,40 @@ func (a *Agent) maybeSelfUpdate(c protocol.AgentConfig) {
 	if !ok {
 		return
 	}
-	a.updateOnce.Do(func() {
-		go func() {
-			// Spread updates over a few minutes across the fleet.
-			time.Sleep(jitter(2 * time.Minute))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-			defer cancel()
-			if err := a.selfUpdate(ctx, c.LatestAgent, build); err != nil {
-				a.log.Error("self-update failed", "version", c.LatestAgent, "err", err)
+	// One updater at a time. It keeps retrying with backoff (server down,
+	// file locked, no network) until the update succeeds — which restarts
+	// the service — or the agent stops.
+	if !a.updating.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer a.updating.Store(false)
+		// Spread updates over a few minutes across the fleet.
+		wait := jitter(2 * time.Minute)
+		for backoff := 5 * time.Minute; ; backoff = min(backoff*2, time.Hour) {
+			select {
+			case <-a.life.Done():
+				return
+			case <-time.After(wait):
 			}
-		}()
-	})
+			// Use the latest config: its download links are fresh.
+			cur := a.config()
+			if cur.LatestAgent == "" || !newerVersion(cur.LatestAgent, a.opt.Version) {
+				return
+			}
+			if b, ok := cur.AgentBuilds[a.platformKey()]; ok {
+				c, build = cur, b
+			}
+			ctx, cancel := context.WithTimeout(a.life, time.Hour)
+			err := a.selfUpdate(ctx, c.LatestAgent, build)
+			cancel()
+			if err == nil {
+				return
+			}
+			wait = jitter(backoff)
+			a.log.Error("self-update failed", "version", c.LatestAgent, "err", err, "retry_in", wait.Round(time.Second))
+		}
+	}()
 }
 
 func (a *Agent) selfUpdate(ctx context.Context, version string, b protocol.AgentBuild) error {

@@ -504,6 +504,7 @@ func InstallCommand(ctx context.Context, path, typ, args string) (*exec.Cmd, err
 		cmd = exec.CommandContext(ctx, "powershell.exe",
 			"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 			"-File", path)
+		cmd.Args = append(cmd.Args, splitArgs(args)...)
 	default:
 		return nil, fmt.Errorf("unknown package type %q", typ)
 	}

@@ -306,7 +306,8 @@ func (s *remoteSession) injectMouse(m ctrlMsg) {
 		}
 	case "wheel":
 		flags |= mouseEventFWheel
-		data = uint32(int32(-m.D)) // browser delta is inverted vs. WHEEL_DELTA
+		// d follows WHEEL_DELTA: positive scrolls up (the viewer sends -deltaY).
+		data = uint32(int32(m.D))
 	default:
 		return
 	}

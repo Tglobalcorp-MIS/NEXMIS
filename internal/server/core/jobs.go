@@ -93,7 +93,7 @@ func (s *Service) tick(ctx context.Context) {
 			continue
 		}
 		actor := Actor{Name: nonEmptyPtr(d.CreatedByName, "system")}
-		if err := s.runDeployment(ctx, actor, id, nil); err != nil {
+		if err := s.runDeployment(ctx, actor, id, nil, true); err != nil {
 			s.Log.Error("run deployment", "id", id, "err", err)
 		}
 		if d, err := s.Store.GetDeployment(ctx, id); err == nil {
@@ -181,6 +181,9 @@ func (s *Service) ResetAdminPassword(ctx context.Context, pw string) error {
 		return err
 	}
 	if err := s.Store.RecordLoginSuccess(ctx, u.ID); err != nil {
+		return err
+	}
+	if err := s.Store.DeleteUserSessions(ctx, u.ID, ""); err != nil {
 		return err
 	}
 	s.Audit(ctx, Actor{Name: "console"}, "user.reset_admin", "user", u.ID.String(), "admin", nil, true)

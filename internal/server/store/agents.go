@@ -86,6 +86,24 @@ type EnrollInput struct {
 func (s *Store) Enroll(ctx context.Context, in EnrollInput) (deviceID, agentID uuid.UUID, err error) {
 	agentID = uuid.New()
 	err = s.InTx(ctx, func(tx pgx.Tx) error {
+		// A retry after a lost response arrives with the key the server
+		// already stored for this machine: answer it again without using up
+		// the token (a single-use token would otherwise strand the agent).
+		var tokenOK bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM enrollment_tokens WHERE token_hash = $1
+			AND NOT revoked AND (expires_at IS NULL OR expires_at > now()))`, in.TokenHash).Scan(&tokenOK); err != nil {
+			return err
+		}
+		if tokenOK && in.MachineID != "" {
+			err := tx.QueryRow(ctx, `SELECT id, agent_id FROM devices WHERE machine_id = $1 AND agent_public_key = $2
+				AND agent_id IS NOT NULL`, in.MachineID, in.PublicKey).Scan(&deviceID, &agentID)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 		var tokID uuid.UUID
 		var groupID *uuid.UUID
 		var tags []string

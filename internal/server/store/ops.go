@@ -190,7 +190,7 @@ func (s *Store) GetDeployment(ctx context.Context, id uuid.UUID) (*Deployment, e
 	return scanDeployment(s.Pool.QueryRow(ctx, deploymentSelect+` WHERE dp.id = $1`+deploymentGroup, id))
 }
 
-func (s *Store) CreateDeployment(ctx context.Context, name string, pkg uuid.UUID, t Target, status string, at *time.Time, by uuid.UUID) (uuid.UUID, error) {
+func (s *Store) CreateDeployment(ctx context.Context, name string, pkg uuid.UUID, t Target, status string, at *time.Time, by *uuid.UUID) (uuid.UUID, error) {
 	tj, _ := json.Marshal(t)
 	var id uuid.UUID
 	err := s.Pool.QueryRow(ctx, `INSERT INTO deployments (name, package_id, target, status, scheduled_at, created_by)
@@ -198,16 +198,28 @@ func (s *Store) CreateDeployment(ctx context.Context, name string, pkg uuid.UUID
 	return id, mapErr(err)
 }
 
-func (s *Store) SetDeploymentStatus(ctx context.Context, id uuid.UUID, status string) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE deployments SET status = $2 WHERE id = $1`, id, status)
+func (s *Store) SetDeploymentStatus(ctx context.Context, q Querier, id uuid.UUID, status string) error {
+	if q == nil {
+		q = s.Pool
+	}
+	_, err := q.Exec(ctx, `UPDATE deployments SET status = $2 WHERE id = $1`, id, status)
 	return err
 }
 
-// DueDeployments returns scheduled deployments whose time has come and
-// atomically marks them running.
+// ClaimDeployment moves a scheduled deployment to running. It reports false
+// when the deployment was already claimed or canceled. Call it in the same
+// transaction that queues the deployment's commands, so a crash leaves the
+// deployment scheduled rather than running with nothing queued.
+func (s *Store) ClaimDeployment(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE deployments SET status = 'running' WHERE id = $1 AND status = 'scheduled'`, id)
+	return tag.RowsAffected() == 1, err
+}
+
+// DueDeployments returns scheduled deployments whose time has come. They
+// are claimed by ClaimDeployment.
 func (s *Store) DueDeployments(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := s.Pool.Query(ctx, `UPDATE deployments SET status = 'running'
-		WHERE status = 'scheduled' AND scheduled_at <= now() RETURNING id`)
+	rows, err := s.Pool.Query(ctx, `SELECT id FROM deployments
+		WHERE status = 'scheduled' AND scheduled_at <= now() ORDER BY scheduled_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +276,7 @@ func (s *Store) FailedDeploymentDevices(ctx context.Context, id uuid.UUID) ([]uu
 
 func (s *Store) CancelDeploymentCommands(ctx context.Context, id uuid.UUID) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE commands SET status = 'canceled', finished_at = now()
-		WHERE deployment_id = $1 AND status = 'queued'`, id)
+		WHERE deployment_id = $1 AND status IN ('queued','sent')`, id)
 	return err
 }
 

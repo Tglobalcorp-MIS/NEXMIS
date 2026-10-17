@@ -115,6 +115,11 @@ type fakeAgent struct {
 func (e *env) enroll(token, machineID, host string) *fakeAgent {
 	e.t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	return e.enrollKey(token, machineID, host, pub, priv)
+}
+
+func (e *env) enrollKey(token, machineID, host string, pub ed25519.PublicKey, priv ed25519.PrivateKey) *fakeAgent {
+	e.t.Helper()
 	var resp protocol.EnrollResponse
 	b, _ := json.Marshal(protocol.EnrollRequest{Token: token, MachineID: machineID, Hostname: host, OS: "Windows 11 Pro",
 		AgentVersion: "1.0.0", PublicKey: pub})
@@ -150,12 +155,14 @@ func (a *fakeAgent) connect(ctx context.Context, base string) {
 	}
 }
 
-func (a *fakeAgent) write(ctx context.Context, t string, p any) {
+// write sends a message and returns its envelope id.
+func (a *fakeAgent) write(ctx context.Context, t string, p any) string {
 	env, _ := protocol.NewEnvelope(t, uuid.NewString(), "", p)
 	b, _ := json.Marshal(env)
 	if err := a.ws.Write(ctx, websocket.MessageText, b); err != nil {
 		a.t.Fatal(err)
 	}
+	return env.ID
 }
 
 func (a *fakeAgent) read(ctx context.Context) protocol.Envelope {
@@ -290,12 +297,21 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected command %+v", c)
 	}
 	ag.write(ctx, protocol.TCommandAck, protocol.CommandAck{CommandID: c.CommandID, Accepted: true})
-	ag.write(ctx, protocol.TCommandResult, protocol.CommandResult{CommandID: c.CommandID, Status: "succeeded",
+	resID := ag.write(ctx, protocol.TCommandResult, protocol.CommandResult{CommandID: c.CommandID, Status: "succeeded",
 		ExitCode: 0, Stdout: "2026年10月17日"})
 	waitFor(t, "command result", func() bool {
 		e.do("GET", "/api/v1/commands/"+cmd.ID.String(), nil, &cmd)
 		return cmd.Status == "succeeded" && cmd.Stdout == "2026年10月17日"
 	})
+	// The stored result is acked so the agent can drop it from its outbox,
+	// and a resent duplicate is acked again without changing the command.
+	if ack := ag.readType(ctx, protocol.TCommandResultAck); ack.Ref != resID {
+		t.Fatalf("result ack ref %q, want %q", ack.Ref, resID)
+	}
+	dupID := ag.write(ctx, protocol.TCommandResult, protocol.CommandResult{CommandID: c.CommandID, Status: "failed"})
+	if ack := ag.readType(ctx, protocol.TCommandResultAck); ack.Ref != dupID {
+		t.Fatalf("duplicate result ack ref %q, want %q", ack.Ref, dupID)
+	}
 
 	// Invalid command kinds are rejected.
 	if code := e.do("POST", "/api/v1/devices/"+ag.devID+"/commands", map[string]any{"kind": "install"}, nil); code != 400 {
@@ -472,12 +488,55 @@ func TestRoles(t *testing.T) {
 	if resp.StatusCode != 403 {
 		t.Fatalf("missing CSRF header: %d", resp.StatusCode)
 	}
+	// An administrative password reset ends the user's existing sessions.
+	var users []struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	}
+	e.do("GET", "/api/v1/users", nil, &users)
+	for _, u := range users {
+		if u.Username == "viewer1" {
+			if code := e.do("PATCH", "/api/v1/users/"+u.ID, map[string]string{"password": "Viewer-Pass-2"}, nil); code != 200 {
+				t.Fatalf("reset password: %d", code)
+			}
+		}
+	}
+	if code := v.do("GET", "/api/v1/devices", nil, nil); code != 401 {
+		t.Fatalf("session survived password reset: %d", code)
+	}
 	// Account lockout after repeated failures.
 	for i := 0; i < 5; i++ {
 		v.do("POST", "/api/v1/auth/login", map[string]string{"username": "viewer1", "password": "nope"}, nil)
 	}
-	if code := v.do("POST", "/api/v1/auth/login", map[string]string{"username": "viewer1", "password": "Viewer-Pass-1"}, nil); code != 401 {
+	if code := v.do("POST", "/api/v1/auth/login", map[string]string{"username": "viewer1", "password": "Viewer-Pass-2"}, nil); code != 401 {
 		t.Fatalf("expected locked account, got %d", code)
+	}
+}
+
+func TestEnrollRetryWithSingleUseToken(t *testing.T) {
+	e := setup(t)
+	e.login()
+	var tok struct {
+		Token string `json:"token"`
+	}
+	e.do("POST", "/api/v1/enrollment-tokens", map[string]any{"name": "once", "max_uses": 1}, &tok)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	first := e.enrollKey(tok.Token, "M-RETRY", "PC-R", pub, priv)
+	// The response was "lost": the agent retries with the same key.
+	again := e.enrollKey(tok.Token, "M-RETRY", "PC-R", pub, priv)
+	if again.devID != first.devID || again.agentID != first.agentID {
+		t.Fatalf("retry got dev %s agent %s, want %s %s", again.devID, again.agentID, first.devID, first.agentID)
+	}
+	// A different key is a new enrollment and the token is used up.
+	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _ := json.Marshal(protocol.EnrollRequest{Token: tok.Token, MachineID: "M-OTHER", Hostname: "PC-O", PublicKey: pub2})
+	r, err := http.Post(e.srv.URL+"/api/agent/v1/enroll", "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode == 200 {
+		t.Fatal("exhausted single-use token accepted for another machine")
 	}
 }
 
