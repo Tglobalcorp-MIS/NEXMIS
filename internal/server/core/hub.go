@@ -37,8 +37,6 @@ type agentConn struct {
 	cancel   context.CancelFunc
 }
 
-// enqueue queues a frame without blocking; a full queue means the agent is
-// not keeping up and the connection is dropped (it will reconnect).
 // waitRoom blocks until the send buffer is at most half full, so a large
 // backlog is paced by the writer instead of overflowing the buffer (which
 // drops the connection). It returns false when the connection ends.
@@ -53,6 +51,8 @@ func (c *agentConn) waitRoom() bool {
 	return c.ctx.Err() == nil
 }
 
+// enqueue queues a frame without blocking; a full queue means the agent is
+// not keeping up and the connection is dropped (it will reconnect).
 func (c *agentConn) enqueue(b []byte) bool {
 	select {
 	case c.send <- b:

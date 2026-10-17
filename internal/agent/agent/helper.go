@@ -107,19 +107,11 @@ const maxUserChatQueue = 200
 // while the agent is offline so it reaches MIS after reconnecting.
 func (a *Agent) sendUserChat(m protocol.Chat) {
 	a.pendingMu.Lock()
-	queued := len(a.chatOut) > 0
-	a.pendingMu.Unlock()
-	if !queued && a.connected.Load() && a.send(protocol.TChat, m) {
-		return
-	}
-	a.pendingMu.Lock()
 	if len(a.chatOut) < maxUserChatQueue {
 		a.chatOut = append(a.chatOut, m)
 	}
 	a.pendingMu.Unlock()
-	if a.connected.Load() {
-		a.flushUserChat()
-	}
+	a.flushUserChat()
 }
 
 // flushUserChat sends queued user messages in order, stopping at the

@@ -197,20 +197,16 @@ func (s *Service) revalidateADUsers(ctx context.Context, a ad.Settings) {
 	}
 	for _, u := range users {
 		info, err := a.Lookup(u.Username)
-		role := ""
+		role, reason := "", "not_found_or_disabled"
 		switch {
 		case errors.Is(err, ad.ErrUserNotFound):
 		case err != nil:
 			s.Log.Warn("AD revalidation skipped", "err", err)
 			return
 		default:
-			role = a.RoleFor(info.Groups, store.RoleRank)
+			role, reason = a.RoleFor(info.Groups, store.RoleRank), "no_role_mapping"
 		}
 		if role == "" {
-			reason := "no_role_mapping"
-			if err != nil {
-				reason = "not_found_or_disabled"
-			}
 			if err := s.Store.DeleteUserSessions(ctx, u.ID, ""); err != nil {
 				s.Log.Error("revoke AD sessions", "user", u.Username, "err", err)
 				continue
