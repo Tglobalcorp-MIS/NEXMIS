@@ -136,13 +136,13 @@ docker compose start server
 
 ## 9. Windows 實機驗證清單
 
-Agent 的 Windows 程式碼在 Linux 上交叉編譯並通過單元測試，但下列項目**必須在實機上驗證**（建議 Windows 10 22H2 家用版、Windows 11 專業版、一台筆電、一台桌機各一）：
+Agent 的 Windows 程式碼在 Linux 上交叉編譯並通過單元測試，但下列項目**必須在實機上驗證**。家用版電腦可能是 Windows 10 或 Windows 11，兩者都要涵蓋；建議至少準備 Windows 10 22H2 家用版、Windows 11 家用版（24H2）、Windows 11 專業版各一台，其中包含筆電與桌機。Windows 11 的登錄檔 ProductName 仍顯示「Windows 10」，Agent 依組建號碼（≥ 22000）校正為 Windows 11，請確認設備清單顯示正確：
 
 | # | 項目 | 驗證方式 |
 |---|---|---|
 | 1 | 服務安裝、開機自動啟動、失敗自動重啟 | `install` 後重開機；以工作管理員結束處理程序 |
 | 2 | 使用者端助手在登入、切換使用者、登出、鎖定／解鎖時正確啟動與結束 | 快速切換使用者、RDP 登入 |
-| 3 | 硬體盤點：WMI 型別轉換、BitLocker、TPM、顯示卡、記憶體插槽 | `nexmis-agent collect` 與系統資訊比對 |
+| 3 | 硬體盤點：作業系統名稱與版本（Win10／Win11 家用版、專業版）、WMI 型別轉換、BitLocker（家用版為「裝置加密」）、TPM、顯示卡、記憶體插槽 | `nexmis-agent collect` 與系統資訊比對 |
 | 4 | 軟體盤點：32／64 位元、每使用者安裝、Microsoft Store 應用程式 | 與「應用程式與功能」比對 |
 | 5 | 已安裝更新（QFE）日期在中文地區設定下的解析 | 與 `Get-HotFix` 比對 |
 | 6 | 開機時間在「快速啟動」開啟時是否正確 | 關機再開機後比對 |
