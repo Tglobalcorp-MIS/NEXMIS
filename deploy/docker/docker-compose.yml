@@ -1,0 +1,67 @@
+# NEXMIS production stack: PostgreSQL + nexmis-server + Caddy (TLS).
+# Usage: cp .env.example .env && edit && docker compose up -d
+name: nexmis
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nexmis
+      POSTGRES_USER: nexmis
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexmis -d nexmis"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  server:
+    image: ${NEXMIS_IMAGE:-nexmis-server:latest}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${NEXMIS_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NEXMIS_DATABASE_URL: postgres://nexmis:${DB_PASSWORD}@db:5432/nexmis?sslmode=disable
+      NEXMIS_PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
+      NEXMIS_TRUST_PROXY: "true"
+      NEXMIS_MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env}
+      NEXMIS_INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      NEXMIS_TIMEZONE: ${TIMEZONE:-Asia/Taipei}
+    volumes:
+      - data:/var/lib/nexmis
+    networks: [backend, frontend]
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [server]
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy_data:/data
+    networks: [frontend]
+
+volumes:
+  db:
+  data:
+  caddy_data:
+
+networks:
+  backend:
+    internal: true
+  frontend:

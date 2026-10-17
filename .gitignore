@@ -1,0 +1,9 @@
+/dist/
+/data/
+/nexmis-server
+/nexmis-agent
+*.exe
+*.test
+*.out
+.env
+deploy/docker/.env
