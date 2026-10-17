@@ -14,21 +14,16 @@ func TestExecutedLogRecover(t *testing.T) {
 			t.Fatalf("claim %s", id)
 		}
 	}
-	l.Mark("running", execStarted)
-	l.Mark("finished", execStarted)
-	l.Mark("finished", execDone)
+	l.Done("finished")
 
 	// Simulate a restart.
 	l = newExecutedLog(dir)
 	got := l.Recover()
-	if len(got) != 1 || got[0] != "running" {
-		t.Fatalf("interrupted = %v", got)
+	if len(got) != 2 || got[0] != "queued" || got[1] != "running" {
+		t.Fatalf("unfinished = %v", got)
 	}
-	if !l.Claim("queued") {
-		t.Error("a command that never started should run when re-delivered")
-	}
-	if l.Claim("running") || l.Claim("finished") {
-		t.Error("started commands must not run twice")
+	if l.Claim("queued") || l.Claim("running") || l.Claim("finished") {
+		t.Error("claimed commands must not run twice")
 	}
 	if again := newExecutedLog(dir).Recover(); len(again) != 0 {
 		t.Errorf("interrupted reported twice: %v", again)

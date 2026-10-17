@@ -236,8 +236,6 @@ func (s *Store) CancelCommand(ctx context.Context, id uuid.UUID) (*Command, erro
 	return s.GetCommand(ctx, id)
 }
 
-// FailOrphanedCommands marks commands that were running on a device when it
-// disconnected for longer than their timeout as timed out.
 // ExpireCommands marks queued or sent commands past their expiry as
 // expired and returns their ids, so callers can finish dependent work
 // (deployment progress, schedules) even if the device never reconnects.
@@ -252,6 +250,8 @@ func (s *Store) ExpireCommands(ctx context.Context) ([]uuid.UUID, error) {
 	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 }
 
+// TimeoutStaleCommands marks running commands with no result long after
+// their timeout (for example, the device went offline mid-run) as timed out.
 func (s *Store) TimeoutStaleCommands(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := s.Pool.Query(ctx, `UPDATE commands SET status = 'timeout', finished_at = now(),
 		stderr = CASE WHEN stderr = '' THEN '執行逾時，未收到 Agent 回報結果' ELSE stderr END

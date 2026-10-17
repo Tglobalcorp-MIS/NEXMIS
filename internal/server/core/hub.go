@@ -37,20 +37,6 @@ type agentConn struct {
 	cancel   context.CancelFunc
 }
 
-// waitRoom blocks until the send buffer is at most half full, so a large
-// backlog is paced by the writer instead of overflowing the buffer (which
-// drops the connection). It returns false when the connection ends.
-func (c *agentConn) waitRoom() bool {
-	for len(c.send) > cap(c.send)/2 {
-		select {
-		case <-c.ctx.Done():
-			return false
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
-	return c.ctx.Err() == nil
-}
-
 // enqueue queues a frame without blocking; a full queue means the agent is
 // not keeping up and the connection is dropped (it will reconnect).
 func (c *agentConn) enqueue(b []byte) bool {
@@ -119,15 +105,34 @@ func (h *hub) sendRef(deviceID uuid.UUID, typ, ref string, payload any) bool {
 	if c == nil {
 		return false
 	}
-	env, err := protocol.NewEnvelope(typ, uuid.NewString(), ref, payload)
-	if err != nil {
-		return false
-	}
-	b, err := json.Marshal(env)
+	b, err := frame(typ, ref, payload)
 	if err != nil {
 		return false
 	}
 	return c.enqueue(b)
+}
+
+// sendWait is sendTo for c's own backlog: it blocks while the buffer is
+// full instead of dropping the connection, so the writer paces delivery.
+func (c *agentConn) sendWait(typ string, payload any) bool {
+	b, err := frame(typ, "", payload)
+	if err != nil {
+		return false
+	}
+	select {
+	case c.send <- b:
+		return true
+	case <-c.ctx.Done():
+		return false
+	}
+}
+
+func frame(typ, ref string, payload any) ([]byte, error) {
+	env, err := protocol.NewEnvelope(typ, uuid.NewString(), ref, payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(env)
 }
 
 func (h *hub) broadcastConfig(ctx context.Context) {
@@ -312,10 +317,10 @@ func (s *Service) flushPending(c *agentConn) {
 	if err != nil {
 		s.Log.Error("pending commands", "err", err)
 	}
-	// Stop at the first failure: the rest stays queued for the next
-	// connection rather than being pushed into a dead or full buffer.
+	// The backlog can exceed the send buffer, so it is sent with
+	// backpressure; on failure the rest stays queued for the next connection.
 	for i := range cmds {
-		if !c.waitRoom() || !s.deliverCommand(ctx, &cmds[i]) {
+		if !s.sendCommand(ctx, &cmds[i], c.sendWait) {
 			return
 		}
 	}
@@ -324,7 +329,7 @@ func (s *Service) flushPending(c *agentConn) {
 		s.Log.Error("undelivered chat", "err", err)
 	}
 	for _, m := range msgs {
-		if !c.waitRoom() || !s.hub.sendTo(c.deviceID, protocol.TChat, chatToProto(m)) {
+		if !c.sendWait(protocol.TChat, chatToProto(m)) {
 			return
 		}
 	}
@@ -410,6 +415,13 @@ func (s *Service) handleAgentMessage(c *agentConn, env protocol.Envelope) error 
 	case protocol.TCommandResult:
 		var r protocol.CommandResult
 		if err := env.Decode(&r); err != nil {
+			// Malformed results can never be stored; ack so the agent
+			// drops them instead of resending forever.
+			s.hub.sendRef(c.deviceID, protocol.TCommandResultAck, env.ID, nil)
+			return err
+		}
+		if _, err := uuid.Parse(r.CommandID); err != nil {
+			s.hub.sendRef(c.deviceID, protocol.TCommandResultAck, env.ID, nil)
 			return err
 		}
 		cmd, err := s.Store.ApplyResult(ctx, c.deviceID, r)

@@ -93,7 +93,6 @@ func (a *Agent) onCommand(sc protocol.SignedCommand) {
 		// but the overall number of concurrent jobs is bounded.
 		a.cmdSem <- struct{}{}
 		defer func() { <-a.cmdSem }()
-		a.executed.Mark(c.CommandID, execStarted)
 		start := time.Now()
 		res := a.execute(a.life, c)
 		res.CommandID = c.CommandID
@@ -105,7 +104,7 @@ func (a *Agent) onCommand(sc protocol.SignedCommand) {
 		}
 		a.log.Info("command finished", "id", c.CommandID, "kind", c.Kind, "status", res.Status, "exit", res.ExitCode)
 		a.sendResult(res)
-		a.executed.Mark(c.CommandID, execDone)
+		a.executed.Done(c.CommandID)
 		if res.Status == protocol.StatusSucceeded && (c.Kind == protocol.CmdReboot || c.Kind == protocol.CmdShutdown) {
 			a.finishPowerAction(c)
 		}

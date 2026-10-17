@@ -95,7 +95,7 @@ func New(opt Options, cfg *config.Config, log *slog.Logger, col collect.Collecto
 	now := time.Now().UTC()
 	for _, id := range a.executed.Recover() {
 		a.outbox.Put(protocol.CommandResult{CommandID: id, Status: protocol.StatusFailed, ExitCode: -1,
-			Stderr: "Agent 在執行期間重新啟動，無法確認指令是否完成", StartedAt: now, FinishedAt: now})
+			Stderr: "Agent 在指令完成前重新啟動，無法確認是否已執行", StartedAt: now, FinishedAt: now})
 	}
 	return a, nil
 }
@@ -262,6 +262,12 @@ func (a *Agent) session(ctx context.Context) error {
 	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
 
+	// Results sent on the previous connection without an ack are resent on
+	// this one. Holding flushMu orders the reset after any flush still
+	// using the old connection.
+	flushMu.Lock()
+	a.outbox.ResetInFlight()
+	flushMu.Unlock()
 	sendCh := make(chan []byte, 512)
 	a.connMu.Lock()
 	a.conn, a.sendCh = ws, sendCh
@@ -271,8 +277,6 @@ func (a *Agent) session(ctx context.Context) error {
 	a.sendHelperStatus()
 	defer func() {
 		a.connected.Store(false)
-		// Unacked results are resent on the next connection.
-		a.outbox.ResetInFlight()
 		a.connMu.Lock()
 		a.conn, a.sendCh = nil, nil
 		a.connMu.Unlock()

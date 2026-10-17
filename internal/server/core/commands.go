@@ -188,6 +188,12 @@ func commandTTL(kind string) time.Duration {
 
 // deliverCommand signs and sends a queued command if the device is online.
 func (s *Service) deliverCommand(ctx context.Context, cmd *store.Command) bool {
+	return s.sendCommand(ctx, cmd, nil)
+}
+
+// sendCommand is deliverCommand with an optional send function used in
+// place of the hub's non-blocking send.
+func (s *Service) sendCommand(ctx context.Context, cmd *store.Command, send func(string, any) bool) bool {
 	c := s.hub.get(cmd.DeviceID)
 	if c == nil {
 		return false
@@ -216,7 +222,10 @@ func (s *Service) deliverCommand(ctx context.Context, cmd *store.Command) bool {
 		s.Log.Error("sign command", "err", err)
 		return false
 	}
-	if !s.hub.sendTo(cmd.DeviceID, protocol.TCommand, sc) {
+	if send == nil {
+		send = func(typ string, p any) bool { return s.hub.sendTo(cmd.DeviceID, typ, p) }
+	}
+	if !send(protocol.TCommand, sc) {
 		return false
 	}
 	if err := s.Store.MarkCommandSent(ctx, cmd.ID); err != nil {

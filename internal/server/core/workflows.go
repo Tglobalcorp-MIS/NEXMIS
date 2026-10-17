@@ -134,8 +134,10 @@ func (s *Service) CreateDeployment(ctx context.Context, actor Actor, in Deployme
 	s.Audit(ctx, actor, "deployment.create", "deployment", id.String(), in.Name,
 		map[string]any{"package": pkg.Name + " " + pkg.Version, "sha256": pkg.SHA256, "target": in.Target, "scheduled_at": in.ScheduledAt}, true)
 	if runNow {
+		// The deployment exists either way; if starting it fails here the
+		// job loop retries it, so the request itself succeeded.
 		if err := s.runDeployment(ctx, actor, id, nil, true); err != nil {
-			return nil, err
+			s.Log.Error("start deployment", "id", id, "err", err)
 		}
 	}
 	d, err := s.Store.GetDeployment(ctx, id)
@@ -178,7 +180,6 @@ func (s *Service) runDeployment(ctx context.Context, actor Actor, id uuid.UUID, 
 	})
 	var queued []*store.Command
 	err = s.Store.InTx(ctx, func(tx pgx.Tx) error {
-		queued = queued[:0]
 		if claim {
 			ok, err := s.Store.ClaimDeployment(ctx, tx, id)
 			if err != nil || !ok {

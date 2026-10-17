@@ -173,8 +173,7 @@ func (s *Service) adJobs(ctx context.Context, st *adJobState) {
 	}
 	var last time.Time
 	_, _ = s.Store.GetSetting(ctx, "ad_last_sync", &last)
-	interval := time.Duration(a.SyncIntervalMin) * time.Minute
-	if interval <= 0 || time.Since(last) < interval || time.Since(st.lastSyncAttempt) < min(adSyncRetry, interval) {
+	if time.Since(last) < time.Duration(a.SyncIntervalMin)*time.Minute || time.Since(st.lastSyncAttempt) < adSyncRetry {
 		return
 	}
 	st.lastSyncAttempt = time.Now()

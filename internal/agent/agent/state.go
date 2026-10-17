@@ -12,22 +12,15 @@ import (
 	"github.com/tglobalcorp-mis/nexmis/internal/protocol"
 )
 
-// Execution states recorded in executedLog.
-const (
-	execClaimed = "claimed" // accepted, waiting for a worker slot
-	execStarted = "started" // running; side effects may have happened
-	execDone    = "done"    // result written to the outbox
-)
-
 type execEntry struct {
-	At    time.Time `json:"at"`
-	State string    `json:"state"`
+	At   time.Time `json:"at"`
+	Done bool      `json:"done"` // result written to the outbox
 }
 
 // executedLog remembers recently claimed command ids so a re-delivered
-// command is not run twice. Each entry records how far execution got, so a
-// restart can tell a command that never started (safe to run when the
-// server re-delivers it) from one interrupted midway (reported as failed).
+// (or replayed) signed command is never run twice. Entries not yet done
+// when the agent stops are reported as failed on the next start: the
+// server already holds them as running and will not deliver them again.
 type executedLog struct {
 	mu   sync.Mutex
 	path string
@@ -44,7 +37,7 @@ func newExecutedLog(dir string) *executedLog {
 			var old map[string]time.Time
 			if json.Unmarshal(b, &old) == nil {
 				for k, v := range old {
-					l.ids[k] = execEntry{At: v, State: execDone}
+					l.ids[k] = execEntry{At: v, Done: true}
 				}
 			}
 		}
@@ -52,26 +45,21 @@ func newExecutedLog(dir string) *executedLog {
 	return l
 }
 
-// Recover runs once at startup: claims that never started are dropped so
-// the server's re-delivery executes them, and the ids of commands that
-// were running when the agent stopped are returned (and marked done) so
-// the caller can report them as failed.
+// Recover runs once at startup and returns (and marks done) the commands
+// that were claimed but had no result when the agent stopped.
 func (l *executedLog) Recover() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var interrupted []string
+	var unfinished []string
 	for id, e := range l.ids {
-		switch e.State {
-		case execClaimed:
-			delete(l.ids, id)
-		case execStarted:
-			interrupted = append(interrupted, id)
-			l.ids[id] = execEntry{At: e.At, State: execDone}
+		if !e.Done {
+			unfinished = append(unfinished, id)
+			l.ids[id] = execEntry{At: e.At, Done: true}
 		}
 	}
-	sort.Strings(interrupted)
+	sort.Strings(unfinished)
 	l.save()
-	return interrupted
+	return unfinished
 }
 
 // Claim records id and reports true if it had not been seen before.
@@ -81,7 +69,7 @@ func (l *executedLog) Claim(id string) bool {
 	if _, ok := l.ids[id]; ok {
 		return false
 	}
-	l.ids[id] = execEntry{At: time.Now(), State: execClaimed}
+	l.ids[id] = execEntry{At: time.Now()}
 	if len(l.ids) > executedKeep {
 		type kv struct {
 			id string
@@ -91,19 +79,9 @@ func (l *executedLog) Claim(id string) bool {
 		for k, v := range l.ids {
 			all = append(all, kv{k, v})
 		}
-		// Unfinished entries are always kept; finished ones are trimmed
-		// oldest first.
-		sort.Slice(all, func(i, j int) bool {
-			if (all[i].e.State == execDone) != (all[j].e.State == execDone) {
-				return all[i].e.State != execDone
-			}
-			return all[i].e.At.After(all[j].e.At)
-		})
+		sort.Slice(all, func(i, j int) bool { return all[i].e.At.After(all[j].e.At) })
 		l.ids = map[string]execEntry{}
-		for i, e := range all {
-			if i >= executedKeep/2 && e.e.State == execDone {
-				break
-			}
+		for _, e := range all[:executedKeep/2] {
 			l.ids[e.id] = e.e
 		}
 	}
@@ -111,17 +89,15 @@ func (l *executedLog) Claim(id string) bool {
 	return true
 }
 
-// Mark advances the state of a claimed id.
-func (l *executedLog) Mark(id, state string) {
+// Done records that the result of id is in the outbox.
+func (l *executedLog) Done(id string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e, ok := l.ids[id]
-	if !ok {
-		return
+	if e, ok := l.ids[id]; ok {
+		e.Done = true
+		l.ids[id] = e
+		l.save()
 	}
-	e.State = state
-	l.ids[id] = e
-	l.save()
 }
 
 func (l *executedLog) save() {
