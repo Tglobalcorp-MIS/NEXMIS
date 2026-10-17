@@ -156,6 +156,7 @@ func install(args []string) error {
 	caFile := fs.String("ca", "", "企業 CA 憑證（PEM）檔案路徑")
 	pin := fs.String("pin", "", "伺服器憑證 SHA-256 指紋（自簽憑證時使用）")
 	insecure := fs.Bool("insecure", false, "不驗證伺服器憑證（僅限測試）")
+	allowHTTP := fs.Bool("allow-http", false, "允許 http:// 明文連線（僅限開發測試，正式環境請勿使用）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -169,7 +170,9 @@ func install(args []string) error {
 	}
 	if *server != "" {
 		u := strings.TrimRight(*server, "/")
-		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		// Over cleartext an on-path attacker could answer enrollment with
+		// its own signing key and then run commands as LocalSystem.
+		if !strings.HasPrefix(u, "https://") && !(*allowHTTP && strings.HasPrefix(u, "http://")) {
 			return errors.New("--server 必須以 https:// 開頭")
 		}
 		if u != cfg.ServerURL && cfg.ServerURL != "" {

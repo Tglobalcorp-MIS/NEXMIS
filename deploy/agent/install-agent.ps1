@@ -31,6 +31,9 @@ param(
   [string]$CAFile,
   [string]$PinSHA256,
   [switch]$Insecure,
+  # Development only: allows an http:// server. Over cleartext anyone on the
+  # network path can replace the agent binary or its enrollment.
+  [switch]$AllowHttp,
   [string]$LogFile = (Join-Path $env:ProgramData 'NEXMIS\install.log')
 )
 
@@ -53,6 +56,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $Server = $Server.TrimEnd('/')
+if (-not $Server.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase) -and
+    -not ($AllowHttp -and $Server.StartsWith('http://', [StringComparison]::OrdinalIgnoreCase))) {
+  Write-Error '-Server 必須以 https:// 開頭。'
+  exit 1
+}
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $arch = switch ($arch) { 'ARM64' { 'arm64' } default { 'amd64' } }
 
@@ -148,6 +156,7 @@ try {
   if ($CAFile)    { $installArgs += @('--ca', $CAFile) }
   if ($PinSHA256) { $installArgs += @('--pin', $PinSHA256) }
   if ($Insecure)  { $installArgs += '--insecure' }
+  if ($AllowHttp) { $installArgs += '--allow-http' }
 
   Write-Log '執行 nexmis-agent install'
   & $exe @installArgs 2>&1 | ForEach-Object { Write-Log "  $_" }

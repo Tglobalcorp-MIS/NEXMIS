@@ -38,7 +38,7 @@
 
 ### 1.4 TLS 憑證
 
-Agent 一律透過 HTTPS／WSS 連線。三種做法擇一：
+Agent 一律透過 HTTPS／WSS 連線，安裝時拒絕 `http://` 伺服器網址（明文連線可被中間人冒充伺服器並以 SYSTEM 身分執行指令；僅開發測試可加 `--allow-http`／`-AllowHttp`）。三種做法擇一：
 
 1. **企業 CA 簽發（建議）**：由公司 AD CS 或其他內部 CA 簽發 `mis.corp.local` 憑證。網域電腦已信任企業根憑證，Agent 不需額外參數。
 2. **企業 CA，但端點未信任**：安裝 Agent 時加上 `--ca ca.pem`（或 `install-agent.ps1 -CAFile`）。
