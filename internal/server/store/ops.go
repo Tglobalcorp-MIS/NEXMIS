@@ -506,6 +506,14 @@ func (s *Store) ListScans(ctx context.Context, p Page) ([]DiscoveryScan, int, er
 	return out, total, rows.Err()
 }
 
+// FailInterruptedScans marks scans the server itself was running when it
+// stopped as failed; probe scans finish through their agent command.
+func (s *Store) FailInterruptedScans(ctx context.Context) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE discovery_scans SET status = 'failed', error = '伺服器在掃描期間重新啟動',
+		finished_at = now() WHERE status = 'running' AND probe_device_id IS NULL`)
+	return err
+}
+
 // FinishScan stores scan results, linking each host to an existing device
 // by MAC, IP or hostname.
 func (s *Store) FinishScan(ctx context.Context, id uuid.UUID, hosts []protocol.DiscoveredHost, scanErr string) error {

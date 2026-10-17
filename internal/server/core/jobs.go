@@ -21,6 +21,9 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	if err := s.Store.EndStaleRemoteSessions(ctx); err != nil {
 		return err
 	}
+	if err := s.Store.FailInterruptedScans(ctx); err != nil {
+		return err
+	}
 	n, err := s.Store.CountUsers(ctx)
 	if err != nil {
 		return err

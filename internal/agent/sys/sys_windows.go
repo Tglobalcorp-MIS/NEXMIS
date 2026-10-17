@@ -324,7 +324,8 @@ func allowServiceSAS() error {
 }
 
 // RestartService stops the named service (waiting for Stopped, stopping any
-// dependent services first) and starts it again, via the SCM.
+// running dependent services first) and starts it again, then restarts the
+// dependents it stopped, via the SCM.
 func RestartService(ctx context.Context, name string) error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -337,14 +338,16 @@ func RestartService(ctx context.Context, name string) error {
 	}
 	defer s.Close()
 
-	// Stop dependents first.
-	deps, err := s.ListDependentServices(svc.AnyActivity)
-	if err == nil {
-		for _, dep := range deps {
-			if ds, derr := m.OpenService(dep); derr == nil {
-				_ = stopAndWait(ctx, ds)
-				ds.Close()
+	// Stop running dependents first. The list is ordered so that each
+	// service comes before the services it depends on.
+	deps, _ := s.ListDependentServices(svc.Active)
+	var stopped []string
+	for _, dep := range deps {
+		if ds, err := m.OpenService(dep); err == nil {
+			if stopAndWait(ctx, ds) == nil {
+				stopped = append(stopped, dep)
 			}
+			ds.Close()
 		}
 	}
 	if err := stopAndWait(ctx, s); err != nil {
@@ -352,6 +355,20 @@ func RestartService(ctx context.Context, name string) error {
 	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("start service %q: %w", name, err)
+	}
+	var failed []string
+	for i := len(stopped) - 1; i >= 0; i-- {
+		ds, err := m.OpenService(stopped[i])
+		if err == nil {
+			err = ds.Start()
+			ds.Close()
+		}
+		if err != nil {
+			failed = append(failed, stopped[i])
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("service %q restarted, but dependent services did not start: %s", name, strings.Join(failed, ", "))
 	}
 	return nil
 }
@@ -551,18 +568,35 @@ func lookupUninstallString(id string) (string, error) {
 		{`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\` + id, registry.QUERY_VALUE | registry.WOW64_64KEY},
 		{`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\` + id, registry.QUERY_VALUE | registry.WOW64_32KEY},
 	}
+	type loc struct {
+		root   registry.Key
+		path   string
+		access uint32
+	}
+	var locs []loc
 	for _, r := range roots {
-		k, err := registry.OpenKey(registry.LOCAL_MACHINE, r.path, r.access)
+		locs = append(locs, loc{registry.LOCAL_MACHINE, r.path, r.access})
+	}
+	// Per-user installs live in each loaded user hive.
+	if hku, err := registry.OpenKey(registry.USERS, "", registry.ENUMERATE_SUB_KEYS); err == nil {
+		sids, _ := hku.ReadSubKeyNames(-1)
+		hku.Close()
+		for _, sid := range sids {
+			if !strings.HasSuffix(sid, "_Classes") {
+				locs = append(locs, loc{registry.USERS, sid + `\` + roots[0].path, registry.QUERY_VALUE})
+			}
+		}
+	}
+	for _, l := range locs {
+		k, err := registry.OpenKey(l.root, l.path, l.access)
 		if err != nil {
 			continue
 		}
-		if s, _, err := k.GetStringValue("QuietUninstallString"); err == nil && s != "" {
-			k.Close()
-			return s, nil
-		}
-		if s, _, err := k.GetStringValue("UninstallString"); err == nil && s != "" {
-			k.Close()
-			return s, nil
+		for _, v := range []string{"QuietUninstallString", "UninstallString"} {
+			if s, _, err := k.GetStringValue(v); err == nil && s != "" {
+				k.Close()
+				return s, nil
+			}
 		}
 		k.Close()
 	}

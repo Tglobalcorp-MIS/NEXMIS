@@ -379,6 +379,10 @@ type Battery struct {
 // ---- Commands ----
 
 // Command kinds.
+// MaxRebootDeferMinutes is the longest single deferral a user can choose
+// for a reboot or shutdown; the server budgets command timeouts with it.
+const MaxRebootDeferMinutes = 60
+
 const (
 	CmdPowerShell     = "powershell"
 	CmdCmd            = "cmd"

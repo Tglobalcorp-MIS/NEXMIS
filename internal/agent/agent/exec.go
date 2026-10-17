@@ -359,7 +359,7 @@ func (a *Agent) prepareReboot(ctx context.Context, c protocol.Command, args prot
 		}
 		defersLeft--
 		deferred++
-		mins := max(5, min(resp.DeferMinutes, 240))
+		mins := max(5, min(resp.DeferMinutes, protocol.MaxRebootDeferMinutes))
 		a.log.Info("user deferred reboot", "minutes", mins, "defers_left", defersLeft)
 		select {
 		case <-ctx.Done():
@@ -468,17 +468,23 @@ func (a *Agent) install(ctx context.Context, args protocol.InstallArgs, timeout 
 	}
 	dir := filepath.Join(a.opt.DataDir, "packages", safeName(args.SHA256[:min(16, len(args.SHA256))]))
 	dest := filepath.Join(dir, filepath.Base(args.FileName))
-	dctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+	// The command timeout covers download and install together, matching
+	// the deadline the server enforces from the agent's ack.
+	deadline := time.Now().Add(timeout)
+	dctx, cancel := context.WithDeadline(ctx, deadline)
 	err := a.download(dctx, args.DownloadURL, dest, args.SHA256, args.Size)
 	cancel()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return protocol.CommandResult{Status: protocol.StatusTimeout, ExitCode: -1, Stderr: "下載套件逾時"}
+		}
 		return failed("%v", err)
 	}
 	cmd, err := sys.InstallCommand(ctx, dest, args.Type, args.Arguments)
 	if err != nil {
 		return failed("無法建立安裝命令：%v", err)
 	}
-	res := runCmd(ctx, cmd, func() {}, timeout)
+	res := runCmd(ctx, cmd, func() {}, time.Until(deadline))
 	codes := args.SuccessCodes
 	if len(codes) == 0 {
 		codes = []int{0, 3010, 1641}

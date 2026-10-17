@@ -587,7 +587,7 @@ func (s *Server) exportAudit(w http.ResponseWriter, r *http.Request) {
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"時間", "操作者", "來源 IP", "動作", "目標類型", "目標 ID", "目標名稱", "結果", "詳細內容"})
 	err := s.svc.Store.EachAudit(r.Context(), auditFilter(r), func(e store.AuditEntry) error {
-		return cw.Write([]string{e.At.In(loc).Format("2006-01-02 15:04:05"), e.ActorName, e.ActorIP, e.Action,
+		return cw.Write([]string{e.At.In(loc).Format("2006-01-02 15:04:05"), csvSafe(e.ActorName), e.ActorIP, e.Action,
 			e.TargetType, e.TargetID, csvSafe(e.TargetName), e.Result, csvSafe(string(e.Details))})
 	})
 	cw.Flush()

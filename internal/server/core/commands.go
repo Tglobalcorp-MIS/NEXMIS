@@ -100,11 +100,9 @@ func (s *Service) normalize(ctx context.Context, nc NewCommand) (string, json.Ra
 		if len(a.Message) > 500 {
 			return "", nil, 0, invalid("訊息過長")
 		}
-		// Reboot waits at most countdown + all deferrals.
-		timeout = a.CountdownSec*(cfg.RebootMaxDefer+1) + 3600
-		if timeout > 6*3600 {
-			timeout = 6 * 3600
-		}
+		// A reboot runs for at most every countdown plus every deferral at
+		// its longest, with some slack for the result to arrive.
+		timeout = a.CountdownSec*(cfg.RebootMaxDefer+1) + cfg.RebootMaxDefer*protocol.MaxRebootDeferMinutes*60 + 600
 		args = a
 	case protocol.CmdNotify:
 		var a protocol.NotifyArgs
