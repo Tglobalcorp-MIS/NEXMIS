@@ -1,0 +1,24 @@
+# TLS termination for NEXMIS.
+# Option A (default): company-issued certificate placed in ./certs
+#   (server.crt = full chain, server.key = private key).
+# Option B: replace the "tls" line with "tls internal" to let Caddy issue
+#   a self-signed certificate (agents then need --pin or --ca).
+{$SERVER_NAME} {
+	tls /certs/server.crt /certs/server.key
+	encode zstd gzip
+	reverse_proxy server:8080 {
+		# WebSockets (agents, live events, remote sessions) are long-lived.
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+	request_body {
+		max_size 2GB
+	}
+	log {
+		output stdout
+		format json
+	}
+}

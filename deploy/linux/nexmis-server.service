@@ -1,0 +1,39 @@
+[Unit]
+Description=NEXMIS central management server
+Documentation=https://github.com/tglobalcorp-mis/nexmis
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexmis
+Group=nexmis
+Environment=NEXMIS_CONFIG=/etc/nexmis/nexmis.env
+ExecStartPre=/usr/local/bin/nexmis-server --migrate
+ExecStart=/usr/local/bin/nexmis-server
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/nexmis
+# Allows binding 443 directly when built-in TLS is used.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
