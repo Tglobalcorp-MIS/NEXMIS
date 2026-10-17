@@ -66,17 +66,63 @@ try {
     Copy-Item -Path $AgentPath -Destination $exe -Force
   } else {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    if ($Insecure -or $PinSHA256) {
-      # The download itself is authorised by the token; the agent enforces
-      # the pin for every later connection.
-      [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    # The installer request carries the enrollment token and returns code
+    # that runs as SYSTEM, so the server must be authenticated exactly as
+    # the agent will authenticate it later: by pin, by the given CA, or by
+    # the Windows trust store. Any failure inside the callback rejects the
+    # connection (fail closed). The check is compiled C#, because a script
+    # block callback cannot run on the .NET thread pool in PowerShell 7.
+    Add-Type -TypeDefinition @'
+    using System;
+    using System.Net;
+    using System.Net.Security;
+    using System.Security.Cryptography;
+    using System.Security.Cryptography.X509Certificates;
+    public static class NexmisTls {
+        public static string Pin;
+        public static X509Certificate2 Ca;
+        public static bool Insecure;
+        public static bool Validate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
+            if (Insecure) return true;
+            if (cert == null) return false;
+            if (!string.IsNullOrEmpty(Pin)) {
+                using (SHA256 sha = SHA256.Create()) {
+                    byte[] h = sha.ComputeHash(cert.GetRawCertData());
+                    return BitConverter.ToString(h).Replace("-", "").ToLowerInvariant() == Pin;
+                }
+            }
+            if (Ca != null) {
+                if ((errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
+                X509Chain c = new X509Chain();
+                c.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                c.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                c.ChainPolicy.ExtraStore.Add(Ca);
+                if (!c.Build(new X509Certificate2(cert))) return false;
+                X509Certificate2 root = c.ChainElements[c.ChainElements.Count - 1].Certificate;
+                return root.Thumbprint == Ca.Thumbprint;
+            }
+            return errors == SslPolicyErrors.None;
+        }
     }
+'@
+    if ($PinSHA256) {
+      [NexmisTls]::Pin = ($PinSHA256 -replace '[:\s]', '').ToLowerInvariant()
+      if ([NexmisTls]::Pin -notmatch '^[0-9a-f]{64}$') { throw '-PinSHA256 必須是 64 個十六進位字元的 SHA-256 指紋' }
+    } elseif ($CAFile) {
+      [NexmisTls]::Ca = New-Object Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $CAFile
+    }
+    # -Insecure is for test environments only: the token and the binary are
+    # then exposed to anyone on the network path.
+    [NexmisTls]::Insecure = [bool]$Insecure -and -not ($PinSHA256 -or $CAFile)
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = [Net.Security.RemoteCertificateValidationCallback][NexmisTls]::Validate
     $uri = "$Server/api/agent/v1/installer?arch=$arch&token=" + [uri]::EscapeDataString($Token)
     Write-Log "下載 Agent（$arch）：$Server"
     $attempt = 0
     while ($true) {
       try {
-        Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $exe -TimeoutSec 300
+        # WebClient goes through HttpWebRequest, which honours the validation
+        # callback in both Windows PowerShell and PowerShell 7.
+        (New-Object Net.WebClient).DownloadFile($uri, $exe)
         break
       } catch {
         $attempt++
@@ -87,16 +133,21 @@ try {
     }
   }
 
+  # A signed binary must verify; an unsigned build (v1 releases) is
+  # accepted because its origin was established by the TLS checks above.
   $sig = Get-AuthenticodeSignature -FilePath $exe
   Write-Log "數位簽章狀態：$($sig.Status)"
+  if ($sig.Status -ne 'Valid' -and $sig.Status -ne 'NotSigned') {
+    throw "安裝檔數位簽章無效（$($sig.Status)），已中止"
+  }
 
-  $args = @('install', '--server', $Server, '--token', $Token)
-  if ($CAFile)    { $args += @('--ca', $CAFile) }
-  if ($PinSHA256) { $args += @('--pin', $PinSHA256) }
-  if ($Insecure)  { $args += '--insecure' }
+  $installArgs = @('install', '--server', $Server, '--token', $Token)
+  if ($CAFile)    { $installArgs += @('--ca', $CAFile) }
+  if ($PinSHA256) { $installArgs += @('--pin', $PinSHA256) }
+  if ($Insecure)  { $installArgs += '--insecure' }
 
   Write-Log '執行 nexmis-agent install'
-  & $exe @args 2>&1 | ForEach-Object { Write-Log "  $_" }
+  & $exe @installArgs 2>&1 | ForEach-Object { Write-Log "  $_" }
   if ($LASTEXITCODE -ne 0) { throw "nexmis-agent install 結束代碼 $LASTEXITCODE" }
 
   Write-Log '安裝完成，服務 NexmisAgent 已啟動。'
@@ -105,5 +156,6 @@ try {
   Write-Log "安裝失敗：$($_.Exception.Message)"
   exit 1
 } finally {
+  [Net.ServicePointManager]::ServerCertificateValidationCallback = $null
   Remove-Item -Path $work -Recurse -Force -ErrorAction SilentlyContinue
 }
