@@ -1,9 +1,6 @@
 package sys
 
-import (
-	"path/filepath"
-	"strings"
-)
+import "strings"
 
 // UninstallKey is the registry key, under HKLM, of the agent's entry in
 // "Settings → Apps" (Programs and Features).
@@ -18,7 +15,8 @@ type UninstallEntry struct {
 	SizeKB         uint32
 }
 
-// UninstallValues returns the string and DWORD values of the entry. The
+// UninstallValues returns the string and DWORD values of the entry. Paths
+// are Windows paths whatever the build platform (tests run on Linux too). The
 // uninstall command purges everything and, being started from Settings,
 // asks for elevation itself (--gui) and reports the result in a dialog.
 func UninstallValues(e UninstallEntry) (strs map[string]string, dwords map[string]uint32) {
@@ -28,7 +26,7 @@ func UninstallValues(e UninstallEntry) (strs map[string]string, dwords map[strin
 		"DisplayVersion":  e.DisplayVersion,
 		"Publisher":       e.Publisher,
 		"DisplayIcon":     e.ExePath + ",0",
-		"InstallLocation": filepath.Dir(e.ExePath),
+		"InstallLocation": e.ExePath[:max(strings.LastIndexAny(e.ExePath, `\/`), 0)],
 		"UninstallString": exe + " uninstall --purge --gui",
 	}
 	dwords = map[string]uint32{

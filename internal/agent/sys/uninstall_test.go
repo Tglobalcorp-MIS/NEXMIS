@@ -2,7 +2,6 @@ package sys
 
 import (
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -26,7 +25,7 @@ func TestUninstallValues(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, strs[k], v)
 		}
 	}
-	if !strings.HasSuffix(strs["InstallLocation"], "Agent") {
+	if strs["InstallLocation"] != `C:\Program Files\NEXMIS\Agent` {
 		t.Errorf("InstallLocation = %q", strs["InstallLocation"])
 	}
 	if dwords["NoModify"] != 1 || dwords["NoRepair"] != 1 || dwords["EstimatedSize"] != 12345 {
