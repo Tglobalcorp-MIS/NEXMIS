@@ -138,6 +138,9 @@ func runAgent(asService bool) error {
 			if err := registerUninstall(exe); err != nil {
 				log.Warn("register uninstall entry", "err", err)
 			}
+			if err := winsvc.EnsureRecovery(serviceName); err != nil {
+				log.Warn("set service recovery", "err", err)
+			}
 		}
 		a, err := agent.New(agent.Options{Version: Version, ServiceName: serviceName, DataDir: dataDir, ExePath: exe},
 			cfg, log, collect.New(), helperhost.New(log, exe))
@@ -147,7 +150,10 @@ func runAgent(asService bool) error {
 		}
 		log.Info("NEXMIS agent starting", "version", Version, "server", cfg.ServerURL, "service", asService)
 		err = a.Run(ctx)
-		if err != nil {
+		switch {
+		case errors.Is(err, agent.ErrRestartRequired):
+			log.Info("agent stopping for restart after update")
+		case err != nil:
 			log.Error("agent stopped", "err", err)
 		}
 		return err

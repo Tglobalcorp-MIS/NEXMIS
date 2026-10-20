@@ -88,12 +88,17 @@ func (a *Agent) selfUpdate(ctx context.Context, version string, b protocol.Agent
 	}
 	a.log.Info("agent update verified", "version", version, "sha256", b.SHA256)
 	a.log.Info("installing agent update", "from", a.opt.Version, "to", version)
-	if err := sys.ReplaceAndRestart(dest, a.opt.ServiceName); err != nil {
+	if err := sys.ReplaceBinary(dest); err != nil {
 		return err
 	}
 	_ = os.Remove(dest)
+	a.requestRestart(restartDelay)
 	return nil
 }
+
+// restartDelay is how long the agent keeps running after replacing its
+// executable, so the result of an "agent.update" command can be sent first.
+const restartDelay = 3 * time.Second
 
 // updateCheckInterval is the configured check interval, at least
 // minUpdateCheck.
