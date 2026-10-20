@@ -821,6 +821,29 @@ export interface AgentConfig {
   consent_timeout_sec: number
   reboot_countdown_sec: number
   reboot_max_defer: number
+  update_check_sec: number
+}
+
+export type AgentVersionState = 'current' | 'outdated' | 'newer' | 'unknown'
+
+export interface AgentUpdateStatus {
+  version: string
+  platforms: string[]
+  auto_update: boolean
+  auto_update_source: 'manifest' | 'settings'
+  manifest_auto_update: boolean
+  update_check_sec: number
+  connected_agents: number
+  summary: { total: number; current: number; outdated: number; offline: number; unknown: number }
+  versions: { version: string; online: number; offline: number; state: AgentVersionState }[]
+  last_push_at: string | null
+  last_push_agents: number
+  last_push_reason?: string
+}
+
+export interface AgentUpdateSettings {
+  /** null 表示沿用 manifest.json 的 auto_update */
+  auto_update: boolean | null
 }
 
 export interface GeneralSettings {

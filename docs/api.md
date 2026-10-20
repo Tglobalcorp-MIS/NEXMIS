@@ -266,7 +266,10 @@ Cron 為標準 5 欄位（分 時 日 月 週），時區以伺服器設定的 `
 | GET/PUT | `/settings/ad` | `ADSettings`（`bind_password` 只寫不讀，回傳 `bind_password_set: true`） |
 | POST | `/settings/ad/test` | 測試連線，回傳 `{ok, message, sample_computers}` |
 | POST | `/settings/ad/sync` | 立即同步電腦物件，回傳 `{added, updated, total}` |
-| GET/PUT | `/settings/agent` | `AgentConfig`（心跳、盤點頻率、同意政策、重開機倒數…） |
+| GET/PUT | `/settings/agent` | `AgentConfig`（心跳、盤點頻率、同意政策、重開機倒數、更新檢查間隔…） |
+| GET | `/settings/agent-update` | `AgentUpdateStatus`：發佈版本、自動更新狀態與來源、各版本裝置數 |
+| PUT | `/settings/agent-update` | `{auto_update: true \| false \| null}`；`null` 表示沿用 `manifest.json`。有效版本改變時自動推送；寫入稽核 `settings.agent_update` |
+| POST | `/settings/agent-update/push` | 立即把發佈版本推送給所有在線 Agent（分散於數分鐘內）→ `202 {version, agents}`；未發佈或自動更新關閉時 `409`；寫入稽核 `agent.update.push` |
 | GET/PUT | `/settings/general` | `{ server_url, timezone, data_retention_days, battery_alert_percent, warranty_alert_days }` |
 | GET | `/enrollment-tokens` | |
 | POST | `/enrollment-tokens` | `{name, expires_at?, max_uses?, group_id?, tags?}` → 回傳 `EnrollmentToken` 加上 `token`（明文，只顯示一次）、`install_command`（`powershell -EncodedCommand` 單行安裝指令，可貼到系統管理員 PowerShell 或命令提示字元；伺服器網址非 https 時為空字串）與 `install_pin`（內建 TLS 憑證未受系統信任時的 SHA-256 指紋，已帶入指令；否則為空字串） |
@@ -287,7 +290,16 @@ Cron 為標準 5 欄位（分 時 日 月 週），時區以伺服器設定的 `
 // AgentConfig
 { "heartbeat_sec": 60, "health_sec": 900, "battery_sec": 21600, "hardware_sec": 86400,
   "software_sec": 21600, "consent_policy": "always_ask", "consent_timeout_sec": 60,
-  "reboot_countdown_sec": 300, "reboot_max_defer": 3 }
+  "reboot_countdown_sec": 300, "reboot_max_defer": 3, "update_check_sec": 21600 }
+
+// AgentUpdateStatus（state：current 已是最新、outdated 待更新、newer 較發佈版本新、unknown 無法比較，例如 dev 版）
+{ "version": "1.0.1", "platforms": ["windows/amd64"], "auto_update": true,
+  "auto_update_source": "manifest", "manifest_auto_update": true, "update_check_sec": 21600,
+  "connected_agents": 42,
+  "summary": { "total": 50, "current": 30, "outdated": 12, "offline": 8, "unknown": 0 },
+  "versions": [{ "version": "1.0.0", "online": 12, "offline": 5, "state": "outdated" },
+               { "version": "1.0.1", "online": 30, "offline": 3, "state": "current" }],
+  "last_push_at": "2026-10-20T10:00:00+08:00", "last_push_agents": 42, "last_push_reason": "release_changed" }
 
 // EnrollmentToken
 { "id": "uuid", "name": "總部大量部署", "token_prefix": "nxe_ab12", "expires_at": null, "max_uses": null,
@@ -304,3 +316,17 @@ Cron 為標準 5 欄位（分 時 日 月 週），時區以伺服器設定的 `
 | GET | `/api/agent/v1/files/{token}` | HMAC 簽章下載權杖（部署套件、Agent 更新），綁定裝置且有期限，支援 Range 續傳 |
 | GET | `/api/agent/v1/installer?arch=` | 以 `X-NEXMIS-Enroll-Token` 標頭帶入有效註冊權杖（不放在網址，避免出現在代理或存取記錄）下載 Agent 執行檔（不消耗權杖次數，限速），供 `install-agent.ps1` 與單行安裝指令使用 |
 | GET | `/healthz` | 存活檢查（公開） |
+
+### Agent 設定與自動更新（控制通道訊息）
+
+控制通道每個訊框都是 `{t, id, ref, p}` 信封（`internal/protocol`），雙方都會忽略不認得的訊息類型與欄位。
+
+| 類型 | 方向 | 說明 |
+|---|---|---|
+| `auth.ok` | 伺服器 → Agent | 交握成功，`p.config` 為 `AgentConfig` |
+| `config` | 伺服器 → Agent | 新的 `AgentConfig`。於政策變更、發佈新版 Agent、切換自動更新、管理者「立即推送」時送出（後三者分散時間），或回覆 `config.request`（`ref` = 請求的 `id`） |
+| `config.request` | Agent → 伺服器 | `{reason: "update_check", agent_version}`。Agent 連線期間每 `update_check_sec` 秒（±20%，最短 1 小時）送一次；伺服器每條連線每分鐘最多回覆一次 |
+
+`AgentConfig.latest_agent` 與 `agent_builds`（`"GOOS/GOARCH" → {url, sha256, size}`）只在自動更新開啟且已發佈版本時出現。`url` 是綁定該裝置、7 天有效的 HMAC 下載權杖；Agent 只在 `latest_agent` 版本號高於自身時更新，並在替換前驗證 SHA-256（不符即捨棄）。控制通道本身以 Ed25519 交握驗證 Agent 身分，指令仍另以伺服器簽章驗證。
+
+相容性：舊版 Agent 忽略 `update_check_sec`、不送 `config.request`，仍於連線時與推送時更新；舊版伺服器忽略 `config.request`，新版 Agent 照常運作。

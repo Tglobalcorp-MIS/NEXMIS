@@ -24,6 +24,9 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	if err := s.Store.FailInterruptedScans(ctx); err != nil {
 		return err
 	}
+	// Baseline for release change detection: agents get the current
+	// release when they connect.
+	s.CheckAgentRelease(ctx)
 	n, err := s.Store.CountUsers(ctx)
 	if err != nil {
 		return err
@@ -74,6 +77,7 @@ func (s *Service) RunJobs(ctx context.Context) {
 			s.tick(ctx)
 		case <-minute.C:
 			s.adJobs(ctx, &adState)
+			s.CheckAgentRelease(ctx)
 		case <-slow.C:
 			s.hourly(ctx)
 		}
