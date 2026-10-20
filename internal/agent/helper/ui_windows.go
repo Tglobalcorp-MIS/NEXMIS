@@ -109,6 +109,9 @@ func (u *ui) run() {
 	tid, _, _ := procGetCurrentThreadId.Call()
 	u.threadID = tid
 
+	if !enableVisualStyles() {
+		u.log.Warn("common controls v6 unavailable; using classic control style")
+	}
 	u.hIcon = loadAppIcon()
 	u.registerClasses()
 	u.createMain()
@@ -121,10 +124,18 @@ func (u *ui) run() {
 		if int32(r) <= 0 { // 0 = WM_QUIT, -1 = error
 			return
 		}
+		if u.dialogKeys(&m) {
+			continue
+		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 }
+
+var (
+	appIconPath  string
+	appIconSizes = map[int32]uintptr{}
+)
 
 // loadAppIcon writes the embedded .ico to disk and loads it as an HICON.
 func loadAppIcon() uintptr {
@@ -135,9 +146,35 @@ func loadAppIcon() uintptr {
 	p := filepath.Join(dir, "NEXMIS", "helper.ico")
 	_ = os.MkdirAll(filepath.Dir(p), 0o755)
 	_ = os.WriteFile(p, appIcon, 0o644)
+	appIconPath = p
 	h, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(utf16(p))),
 		imageIcon, 0, 0, lrLoadFromFile|lrDefaultSize)
 	return h
+}
+
+// appIconSized loads the app icon at px×px (picking the closest image in the
+// .ico) for crisp drawing at the window's DPI. UI thread only.
+func appIconSized(px int32) uintptr {
+	if h, ok := appIconSizes[px]; ok {
+		return h
+	}
+	if appIconPath == "" {
+		return theUIIcon()
+	}
+	h, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(utf16(appIconPath))),
+		imageIcon, uintptr(px), uintptr(px), lrLoadFromFile)
+	if h == 0 {
+		return theUIIcon()
+	}
+	appIconSizes[px] = h
+	return h
+}
+
+func theUIIcon() uintptr {
+	if theUI != nil {
+		return theUI.hIcon
+	}
+	return 0
 }
 
 var (
@@ -225,8 +262,9 @@ func (u *ui) tooltip() string {
 	u.statusMu.Lock()
 	st := u.status
 	u.statusMu.Unlock()
+	// The server address is deliberately not shown to end users.
 	if st.Connected {
-		return fmt.Sprintf("NEXMIS 已連線\n%s", st.ServerURL)
+		return "NEXMIS 已連線"
 	}
 	return "NEXMIS 未連線"
 }
@@ -269,7 +307,7 @@ func (u *ui) showAbout() {
 	u.statusMu.Unlock()
 	state := "未連線"
 	if st.Connected {
-		state = "已連線 (" + st.ServerURL + ")"
+		state = "已連線"
 	}
 	body := fmt.Sprintf("NEXMIS 使用者端助手\n版本：%s\n狀態：%s", Version, state)
 	messageBox(u.mainHwnd, body, "關於 NEXMIS")

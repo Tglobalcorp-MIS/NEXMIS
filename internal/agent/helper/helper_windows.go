@@ -143,6 +143,8 @@ func (app *helperApp) handlers() handlers {
 	u := app.ui
 	return handlers{
 		Consent: func(ctx context.Context, req helperipc.ConsentRequest) helperipc.ConsentResult {
+			app.log.Info("consent request received", "session", req.SessionID, "mode", req.Mode,
+				"requester", req.Requester, "policy", req.Policy, "timeout_sec", req.TimeoutSec)
 			if req.Policy == "notify_only" {
 				u.notify(helperipc.Notify{
 					Title:   "遠端連線",
@@ -176,6 +178,7 @@ func (app *helperApp) onRemoteStart(msg helperipc.RemoteStart) {
 	app.endBy = ""
 	app.mu.Unlock()
 
+	app.log.Info("remote session starting", "session", msg.SessionID, "mode", msg.Mode, "requester", msg.Requester)
 	app.ui.showBanner(msg.Mode, msg.Requester)
 
 	by, reason := runRemote(ctx, app.log, msg, app.sendCAD)
@@ -186,6 +189,7 @@ func (app *helperApp) onRemoteStart(msg helperipc.RemoteStart) {
 	}
 	app.remoteCancel = nil
 	app.mu.Unlock()
+	app.log.Info("remote session ended", "session", msg.SessionID, "by", by, "reason", reason)
 
 	app.ui.hideBanner()
 	_ = app.send(helperipc.TRemoteEnded, "", helperipc.RemoteEnded{

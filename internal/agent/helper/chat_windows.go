@@ -4,6 +4,9 @@ package helper
 
 import (
 	"strings"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/tglobalcorp-mis/nexmis/internal/agent/helperipc"
 )
@@ -20,6 +23,23 @@ const (
 type chatWin struct {
 	logEdit uintptr
 	input   uintptr
+	send    uintptr
+	dpi     uint32
+}
+
+// layoutChat sizes the transcript, input and send button to the client area.
+func layoutChat(hwnd uintptr) {
+	if theChat.logEdit == 0 {
+		return
+	}
+	var rc windows.Rect
+	procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+	d := theChat.dpi
+	pad, btnW, rowH := dp(12, d), dp(88, d), dp(30, d)
+	w, h := rc.Right, rc.Bottom
+	procMoveWindow.Call(theChat.logEdit, uintptr(pad), uintptr(pad), uintptr(w-2*pad), uintptr(h-3*pad-rowH), 1)
+	procMoveWindow.Call(theChat.input, uintptr(pad), uintptr(h-pad-rowH), uintptr(w-3*pad-btnW), uintptr(rowH), 1)
+	procMoveWindow.Call(theChat.send, uintptr(w-pad-btnW), uintptr(h-pad-rowH), uintptr(btnW), uintptr(rowH), 1)
 }
 
 var theChat chatWin
@@ -33,20 +53,26 @@ func (u *ui) openChat() {
 		u.markChatRead()
 		return
 	}
-	const w, h = 460, 420
-	hwnd := createTopWindow(chatClass, "NEXMIS — 與 MIS 對話",
-		wsOverlappedWn, 0, w, h)
+	hwnd, dpi := createScaledWindow(chatClass, "NEXMIS — 與 MIS 對話",
+		wsOverlappedWn, 0, 460, 400)
 	if hwnd == 0 {
 		return
 	}
 	u.chatHwnd = hwnd
+	theChat.dpi = dpi
+	newSkin(hwnd, dpi, clrWhite) // white transcript instead of the read-only grey
+	font := uiFont(dpi, 10, fwNormal)
 	theChat.logEdit = createControl(hwnd, editClassName, "",
 		uint32(wsChild)|wsVisible|wsBorder|esMultiline|esReadonly|esAutoVScroll|wsVScroll,
-		10, 10, w-35, h-110, 0)
+		0, 0, 0, 0, 0)
 	theChat.input = createControl(hwnd, editClassName, "",
-		uint32(wsChild)|wsVisible|wsBorder|esAutoHScroll, 10, h-90, w-150, 28, 0)
-	createControl(hwnd, buttonClassName, "送出",
-		uint32(wsChild)|wsVisible|wsTabStop|bsDefPushButt, w-130, h-91, 100, 30, idChatSend)
+		uint32(wsChild)|wsVisible|wsBorder|wsTabStop|esAutoHScroll, 0, 0, 0, 0, 0)
+	theChat.send = createControl(hwnd, buttonClassName, "送出",
+		uint32(wsChild)|wsVisible|wsTabStop|bsDefPushButt, 0, 0, 0, 0, idChatSend)
+	for _, c := range []uintptr{theChat.logEdit, theChat.input, theChat.send} {
+		sendMessage(c, wmSetFont, font, 1)
+	}
+	layoutChat(hwnd)
 
 	u.renderChatLog()
 	procShowWindow.Call(hwnd, swShow)
@@ -116,6 +142,9 @@ func (u *ui) renderChatLog() {
 }
 
 func chatWndProc(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
+	if r, ok := skinProc(hwnd, m, wp, lp); ok {
+		return r
+	}
 	u := theUI
 	switch m {
 	case wmCommand:
@@ -133,6 +162,9 @@ func chatWndProc(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 			}
 		}
 		return 0
+	case wmSize:
+		layoutChat(hwnd)
+		return 0
 	case wmClose:
 		if u != nil {
 			u.chatHwnd = 0
@@ -144,6 +176,7 @@ func chatWndProc(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 		if u != nil {
 			u.chatHwnd = 0
 		}
+		dropSkin(hwnd)
 		return 0
 	}
 	return defWindowProc(hwnd, m, wp, lp)
