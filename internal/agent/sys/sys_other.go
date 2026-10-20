@@ -182,8 +182,8 @@ func UninstallCommand(ctx context.Context, uninstallID, args string) (*exec.Cmd,
 	return nil, errWindowsOnly
 }
 
-// ReplaceAndRestart is Windows-only.
-func ReplaceAndRestart(newExe, serviceName string) error { return errWindowsOnly }
+// ReplaceBinary is Windows-only.
+func ReplaceBinary(newExe string) error { return errWindowsOnly }
 
 // CleanupOldBinary is a no-op outside Windows.
 func CleanupOldBinary() {}

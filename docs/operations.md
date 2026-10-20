@@ -68,7 +68,9 @@ docker compose start server
    - 伺服器每分鐘檢查 `manifest.json`；版本、任一執行檔雜湊或自動更新開關改變時，主動把新設定推送給所有在線 Agent。推送以每台約 2 秒分散，整批最長 10 分鐘；Agent 收到後再隨機等待 10 秒～5 分鐘才開始下載，避免數百台同時下載。
    - 離線的 Agent 於下次連線時取得新版本；長時間保持連線的 Agent 另會每隔「檢查 Agent 更新」間隔（預設 6 小時，可在「系統設定 → Agent 設定」調整，最短 1 小時）向伺服器要一次最新設定。
    - 失敗時（下載中斷、雜湊不符、檔案鎖定）Agent 以 5 分鐘起、最長 1 小時的退避重試；伺服器撤回版本或關閉自動更新後，尚未開始的更新會取消。
-   - Agent 紀錄（`C:\ProgramData\NEXMIS\Agent\logs\agent.log`）依序可見 `agent update available`、`downloading agent update`、`agent update verified`、`installing agent update`；失敗為 `self-update failed` 並附原因。伺服器紀錄可見 `new agent release detected`、`pushing agent configuration`。
+   - 替換執行檔後，Agent 約 3 秒後以失敗狀態結束服務，由服務的失敗復原動作（5 秒、30 秒、1 分鐘後重新啟動；「後續失敗也套用」已開啟）啟動新版。Agent 每次以服務啟動時都會重新套用這組復原設定。
+   - Agent 紀錄（`C:\ProgramData\NEXMIS\Agent\logs\agent.log`）依序可見 `agent update available`、`downloading agent update`、`agent update verified`、`installing agent update`、`restarting agent to finish update`、`agent stopping for restart after update`，接著新版的 `NEXMIS agent starting`；失敗為 `self-update failed` 並附原因。伺服器紀錄可見 `new agent release detected`、`pushing agent configuration`。
+   - **1.0.1（含）以前的 Agent**：替換執行檔後不會自行重啟（舊版以背景 `cmd` 執行 `timeout`／`sc`，在無主控台的服務環境下不會生效），新執行檔要等電腦重新開機或手動重啟 `NexmisAgent` 服務才生效。這段期間裝置仍回報舊版本，面板顯示為「待更新」。升級到本版之後的更新即可自動完成。
 5. 「系統設定 → Agent 設定 → Agent 版本與自動更新」：
    - 顯示發佈版本、各版本裝置數（已是最新／待更新／離線／無法比較）與上次推送時間。
    - 「自動更新」可選「沿用 manifest」「開啟」「關閉」。選開啟或關閉後以資料庫設定為準，`manifest.json` 的 `auto_update` 不再生效，直到改回「沿用 manifest」。

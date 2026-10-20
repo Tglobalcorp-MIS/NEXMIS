@@ -26,6 +26,9 @@ func InstallService(name, displayName, description, exePath string, args ...stri
 	return ErrWindowsOnly
 }
 
+// EnsureRecovery is Windows-only.
+func EnsureRecovery(name string) error { return ErrWindowsOnly }
+
 // StartService is Windows-only.
 func StartService(name string) error { return ErrWindowsOnly }
 

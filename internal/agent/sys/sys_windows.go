@@ -619,11 +619,16 @@ func msiProductGUID(cmdline string) string {
 	return ""
 }
 
-// ReplaceAndRestart performs an in-place self-update: it renames the running
-// executable to ".old", moves newExe into its place, then schedules the
-// service to restart via a detached helper process and exits so the service
-// recovery/restart takes over.
-func ReplaceAndRestart(newExe, serviceName string) error {
+// ReplaceBinary performs the file part of an in-place self-update: it renames
+// the running executable to ".old" and moves newExe into its place. The caller
+// then exits with a failure status so the SCM recovery actions restart the
+// service on the new binary.
+//
+// Earlier versions spawned a detached "cmd /c timeout & sc stop & sc start"
+// here. Without a console "timeout" fails immediately and the restarter never
+// stopped the service, so updated agents kept running the old code until the
+// next reboot.
+func ReplaceBinary(newExe string) error {
 	cur, err := os.Executable()
 	if err != nil {
 		return err
@@ -640,18 +645,6 @@ func ReplaceAndRestart(newExe, serviceName string) error {
 		_ = os.Rename(oldPath, cur)
 		return fmt.Errorf("move new exe into place: %w", err)
 	}
-	// Detached restarter: wait for this process to exit, then (re)start the
-	// service. The service's SCM restart will pick up the new binary.
-	restart := exec.Command("cmd.exe", "/c",
-		fmt.Sprintf(`timeout /t 3 /nobreak >nul & sc stop %q >nul & timeout /t 2 /nobreak >nul & sc start %q >nul`, serviceName, serviceName))
-	restart.SysProcAttr = &windows.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
-	}
-	if err := restart.Start(); err != nil {
-		return fmt.Errorf("spawn restarter: %w", err)
-	}
-	_ = restart.Process.Release()
 	return nil
 }
 

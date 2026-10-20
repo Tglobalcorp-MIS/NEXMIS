@@ -54,6 +54,10 @@ type Agent struct {
 	// life is the Run context. Accepted commands run under it, not under a
 	// connection's context, so a reconnect does not abort them.
 	life context.Context
+	// stop ends Run with a cause; ErrRestartRequired makes Run return an
+	// error so the service exits with a failure status and the SCM restarts
+	// it on the replaced binary.
+	stop atomic.Pointer[context.CancelCauseFunc]
 
 	connMu sync.Mutex
 	conn   *websocket.Conn
@@ -102,9 +106,41 @@ func New(opt Options, cfg *config.Config, log *slog.Logger, col collect.Collecto
 
 func (a *Agent) config() protocol.AgentConfig { return *a.acfg.Load() }
 
-// Run blocks until ctx is canceled.
-func (a *Agent) Run(ctx context.Context) error {
+// ErrRestartRequired is returned by Run after a self-update replaced the
+// executable: the process must exit with a failure status so the service
+// recovery actions start the new binary.
+var ErrRestartRequired = errors.New("restart required to finish agent update")
+
+// Run blocks until ctx is canceled, or returns ErrRestartRequired after a
+// self-update.
+func (a *Agent) Run(parent context.Context) error {
+	ctx, stop := context.WithCancelCause(parent)
+	defer stop(nil)
 	a.life = ctx
+	a.stop.Store(&stop)
+	err := a.run(ctx)
+	if errors.Is(context.Cause(ctx), ErrRestartRequired) {
+		return ErrRestartRequired
+	}
+	return err
+}
+
+// requestRestart stops Run with ErrRestartRequired after delay, leaving time
+// for an in-flight command result to reach the server (results are also kept
+// in the outbox and resent after the restart).
+func (a *Agent) requestRestart(delay time.Duration) {
+	stop := a.stop.Load()
+	if stop == nil {
+		return
+	}
+	go func() {
+		time.Sleep(delay)
+		a.log.Info("restarting agent to finish update")
+		(*stop)(ErrRestartRequired)
+	}()
+}
+
+func (a *Agent) run(ctx context.Context) error {
 	if !a.cfg.Enrolled() {
 		if err := a.enrollLoop(ctx); err != nil {
 			return err

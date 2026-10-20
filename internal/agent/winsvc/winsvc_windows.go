@@ -113,18 +113,45 @@ func InstallService(name, displayName, description, exePath string, args ...stri
 	return setRecovery(s)
 }
 
-// setRecovery configures: restart after 1 minute, three times, reset after 1 day.
+// recoveryActions restart the service after 5 seconds, then 30 seconds, then
+// 1 minute; the failure count resets after 1 day. The quick first restart is
+// how a self-update takes effect.
+var recoveryActions = []mgr.RecoveryAction{
+	{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+	{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+	{Type: mgr.ServiceRestart, Delay: time.Minute},
+}
+
+const recoveryResetPeriod = uint32(24 * 60 * 60) // seconds
+
+// setRecovery configures the recovery actions and applies them to non-crash
+// failures too: a self-update ends the service cleanly with a non-zero exit
+// code, which the SCM ignores unless this flag is set.
 func setRecovery(s *mgr.Service) error {
-	actions := []mgr.RecoveryAction{
-		{Type: mgr.ServiceRestart, Delay: time.Minute},
-		{Type: mgr.ServiceRestart, Delay: time.Minute},
-		{Type: mgr.ServiceRestart, Delay: time.Minute},
-	}
-	const resetPeriod = uint32(24 * 60 * 60) // seconds
-	if err := s.SetRecoveryActions(actions, resetPeriod); err != nil {
+	if err := s.SetRecoveryActions(recoveryActions, recoveryResetPeriod); err != nil {
 		return fmt.Errorf("set recovery actions: %w", err)
 	}
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		return fmt.Errorf("set recovery on non-crash failures: %w", err)
+	}
 	return nil
+}
+
+// EnsureRecovery reapplies the recovery settings to an installed service. The
+// agent calls it at every start so installations made by older versions (no
+// non-crash flag) can finish their next self-update.
+func EnsureRecovery(name string) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("connect SCM: %w", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(name)
+	if err != nil {
+		return fmt.Errorf("open service: %w", err)
+	}
+	defer s.Close()
+	return setRecovery(s)
 }
 
 // StartService starts the named service.
