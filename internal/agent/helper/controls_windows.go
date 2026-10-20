@@ -38,23 +38,6 @@ func createControl(parent uintptr, class *uint16, text string, style uint32, x, 
 	return hwnd
 }
 
-// createTopWindow creates a top-level, optionally topmost window centred on the
-// primary monitor.
-func createTopWindow(class *uint16, title string, style, exStyle uint32, w, h int32) uintptr {
-	sx := getSystemMetrics(smCxScreen)
-	sy := getSystemMetrics(smCyScreen)
-	x := (sx - w) / 2
-	y := (sy - h) / 3
-	hwnd, _, _ := procCreateWindowExW.Call(
-		uintptr(exStyle),
-		uintptr(unsafe.Pointer(class)),
-		uintptr(unsafe.Pointer(utf16(title))),
-		uintptr(style),
-		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
-		0, 0, 0, 0)
-	return hwnd
-}
-
 // sendMessageStr sends a message whose lParam is a UTF-16 string pointer.
 func sendMessageStr(hwnd uintptr, m uint32, wp uintptr, s string) uintptr {
 	return sendMessage(hwnd, m, wp, uintptr(unsafe.Pointer(utf16(s))))

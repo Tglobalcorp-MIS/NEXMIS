@@ -144,13 +144,18 @@ func (a *Agent) flushChatQueue() {
 func (a *Agent) onRemoteRequest(sc protocol.SignedCommand) {
 	c, reason := a.verify(sc)
 	if reason != "" || c.Kind != "remote" {
+		a.log.Warn("remote request ignored", "id", c.CommandID, "kind", c.Kind, "reason", reason)
 		return
 	}
 	var req protocol.RemoteRequest
-	if json.Unmarshal(c.Args, &req) != nil {
+	if err := json.Unmarshal(c.Args, &req); err != nil {
+		a.log.Warn("remote request ignored: bad args", "id", c.CommandID, "err", err)
 		return
 	}
+	a.log.Info("remote request received", "session", req.SessionID, "mode", req.Mode,
+		"requester", req.Requester, "policy", req.Policy)
 	consent := func(granted bool, why, user string) {
+		a.log.Info("remote consent sent", "session", req.SessionID, "granted", granted, "reason", why)
 		a.send(protocol.TRemoteConsent, protocol.RemoteConsent{SessionID: req.SessionID, Granted: granted, Reason: why, User: user})
 	}
 	if req.Policy == protocol.ConsentDeny {
@@ -172,8 +177,11 @@ func (a *Agent) onRemoteRequest(sc protocol.SignedCommand) {
 		SessionID: req.SessionID, Mode: req.Mode, Requester: req.Requester, Reason: req.Reason,
 		TimeoutSec: timeout, Policy: req.Policy,
 	}); err != nil {
+		a.log.Warn("consent request not delivered to helper", "session", req.SessionID, "err", err)
 		consent(false, "helper_unavailable", "")
+		return
 	}
+	a.log.Info("consent request sent to helper", "session", req.SessionID, "timeout_sec", timeout)
 }
 
 func (a *Agent) onConsentResult(r helperipc.ConsentResult) {
@@ -184,12 +192,15 @@ func (a *Agent) onConsentResult(r helperipc.ConsentResult) {
 	}
 	a.pendingMu.Unlock()
 	if !ok {
+		a.log.Warn("consent result for unknown session", "session", r.SessionID, "granted", r.Granted)
 		return
 	}
 	user := r.User
 	if user == "" {
 		user = a.host.User()
 	}
+	a.log.Info("consent result from helper", "session", r.SessionID, "granted", r.Granted,
+		"reason", r.Reason, "user", user)
 	a.send(protocol.TRemoteConsent, protocol.RemoteConsent{SessionID: r.SessionID, Granted: r.Granted, Reason: r.Reason, User: user})
 	if !r.Granted {
 		return
