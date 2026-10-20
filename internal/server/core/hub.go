@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -35,6 +36,9 @@ type agentConn struct {
 	send     chan []byte
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	// lastConfigReq is the unix time of the last TConfigRequest answered.
+	lastConfigReq atomic.Int64
 }
 
 // enqueue queues a frame without blocking; a full queue means the agent is
@@ -135,14 +139,40 @@ func frame(typ, ref string, payload any) ([]byte, error) {
 	return json.Marshal(env)
 }
 
-func (h *hub) broadcastConfig(ctx context.Context) {
+func (h *hub) snapshot() []*agentConn {
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	conns := make([]*agentConn, 0, len(h.conns))
 	for _, c := range h.conns {
 		conns = append(conns, c)
 	}
-	h.mu.RUnlock()
-	for _, c := range conns {
+	return conns
+}
+
+func (h *hub) broadcastConfig(ctx context.Context) {
+	for _, c := range h.snapshot() {
+		d, err := h.s.Store.GetDevice(ctx, c.deviceID)
+		if err != nil {
+			continue
+		}
+		h.sendTo(c.deviceID, protocol.TConfig, h.s.configFor(ctx, d))
+	}
+}
+
+// pushConfigs sends the configuration to conns one every step. Agents that
+// reconnected meanwhile are skipped: the handshake gave them a fresh one.
+func (h *hub) pushConfigs(ctx context.Context, conns []*agentConn, step time.Duration) {
+	for i, c := range conns {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(step):
+			}
+		}
+		if h.get(c.deviceID) != c {
+			continue
+		}
 		d, err := h.s.Store.GetDevice(ctx, c.deviceID)
 		if err != nil {
 			continue
@@ -164,7 +194,7 @@ func (s *Service) configFor(ctx context.Context, d *store.Device) protocol.Agent
 	if d.ConsentPolicy != "" {
 		cfg.ConsentPolicy = d.ConsentPolicy
 	}
-	s.applyAgentUpdate(&cfg, d)
+	s.applyAgentUpdate(ctx, &cfg, d)
 	return cfg
 }
 
@@ -496,6 +526,25 @@ func (s *Service) handleAgentMessage(c *agentConn, env protocol.Envelope) error 
 			}
 			s.EndRemote(ctx, id, c.deviceID, reason)
 		}
+
+	case protocol.TConfigRequest:
+		// Periodic update check. Answer at most once a minute per
+		// connection; the agent's own interval is hours.
+		now := time.Now().Unix()
+		if last := c.lastConfigReq.Load(); now-last < 60 || !c.lastConfigReq.CompareAndSwap(last, now) {
+			return nil
+		}
+		var req protocol.ConfigRequest
+		_ = env.Decode(&req)
+		d, err := s.Store.GetDevice(ctx, c.deviceID)
+		if err != nil {
+			return err
+		}
+		cfg := s.configFor(ctx, d)
+		if cfg.LatestAgent != "" && protocol.NewerVersion(cfg.LatestAgent, req.AgentVersion) {
+			s.Log.Info("agent update check: update available", "device", c.name, "from", req.AgentVersion, "to", cfg.LatestAgent)
+		}
+		s.hub.sendRef(c.deviceID, protocol.TConfig, env.ID, cfg)
 
 	case protocol.TPong, protocol.TPing:
 	default:

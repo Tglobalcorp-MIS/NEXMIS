@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -141,7 +142,9 @@ type AgentManifestFile struct {
 	Size   int64  `json:"size"`
 }
 
-var manifestCache struct {
+// manifestCache holds the parsed manifest.json, reloaded when its
+// modification time changes.
+type manifestCache struct {
 	sync.Mutex
 	mod time.Time
 	m   AgentManifest
@@ -160,18 +163,21 @@ func (s *Service) agentManifest() AgentManifest {
 	if err != nil {
 		return AgentManifest{}
 	}
-	manifestCache.Lock()
-	defer manifestCache.Unlock()
-	if st.ModTime().Equal(manifestCache.mod) {
-		return manifestCache.m
+	mc := &s.manifest
+	mc.Lock()
+	defer mc.Unlock()
+	if st.ModTime().Equal(mc.mod) {
+		return mc.m
 	}
 	var m AgentManifest
 	if b, err := os.ReadFile(path); err == nil && json.Unmarshal(b, &m) == nil {
-		manifestCache.m, manifestCache.mod = m, st.ModTime()
+		mc.m, mc.mod = m, st.ModTime()
 	} else {
+		// Keep serving the previous manifest (e.g. while it is being
+		// rewritten); the next call retries.
 		s.Log.Error("invalid agent manifest", "path", path)
 	}
-	return manifestCache.m
+	return mc.m
 }
 
 // AgentManifest exposes the manifest to the API (download page).
@@ -195,9 +201,9 @@ func (s *Service) AgentInstallerPath() (string, string, bool) {
 	return "", "", false
 }
 
-func (s *Service) applyAgentUpdate(cfg *protocol.AgentConfig, d *store.Device) {
+func (s *Service) applyAgentUpdate(ctx context.Context, cfg *protocol.AgentConfig, d *store.Device) {
 	m := s.agentManifest()
-	if !m.AutoUpdate || m.Version == "" || len(m.Builds) == 0 {
+	if !s.autoUpdate(ctx, m) || m.Version == "" || len(m.Builds) == 0 {
 		return
 	}
 	cfg.LatestAgent = m.Version

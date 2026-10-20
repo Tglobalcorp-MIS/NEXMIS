@@ -31,6 +31,8 @@ const (
 	SettingAD      = "ad"
 	SettingAgent   = "agent"
 	SettingGeneral = "general"
+	// SettingAgentUpdate overrides the manifest's auto_update flag.
+	SettingAgentUpdate = "agent_update"
 )
 
 // GeneralSettings are administrator-tunable server settings.
@@ -61,6 +63,10 @@ type Service struct {
 	mu       sync.RWMutex
 	agentCfg *protocol.AgentConfig
 	general  *GeneralSettings
+	agentUpd *AgentUpdateSettings
+
+	manifest manifestCache
+	release  releaseState
 }
 
 func New(cfg *config.Config, st *store.Store, log *slog.Logger) (*Service, error) {
@@ -134,6 +140,7 @@ func (s *Service) SetAgentConfig(ctx context.Context, c protocol.AgentConfig) er
 	clamp(&c.ConsentTimeout, 10, 600)
 	clamp(&c.RebootCountdown, 0, 3600)
 	clamp(&c.RebootMaxDefer, 0, 10)
+	clamp(&c.UpdateCheckSec, 3600, 7*86400)
 	switch c.ConsentPolicy {
 	case protocol.ConsentAlwaysAsk, protocol.ConsentNotifyOnly, protocol.ConsentDeny:
 	default:

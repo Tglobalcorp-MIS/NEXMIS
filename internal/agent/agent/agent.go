@@ -113,6 +113,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.host.Run(ctx)
 	go a.helperLoop(ctx)
 	go a.telemetryLoop(ctx)
+	go a.updateCheckLoop(ctx)
 
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -481,6 +482,9 @@ func (a *Agent) applyConfig(c protocol.AgentConfig) {
 	}
 	if c.ConsentTimeout <= 0 {
 		c.ConsentTimeout = def.ConsentTimeout
+	}
+	if c.UpdateCheckSec <= 0 {
+		c.UpdateCheckSec = def.UpdateCheckSec // older servers do not send it
 	}
 	a.acfg.Store(&c)
 	a.maybeSelfUpdate(c)
