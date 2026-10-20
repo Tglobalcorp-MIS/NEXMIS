@@ -238,6 +238,11 @@ func TestEndToEnd(t *testing.T) {
 	if strings.Contains(tok.InstallCommand, "token="+tok.Token) {
 		t.Fatal("install command must not put the token in the URL")
 	}
+	// Pasted into PowerShell, a $ inside the double-quoted -Command would be
+	// expanded by the outer shell; cmd.exe expands %VAR%.
+	if inner := strings.TrimSuffix(strings.SplitN(tok.InstallCommand, `-Command "`, 2)[1], `"`); strings.ContainsAny(inner, "$`\"%") {
+		t.Fatalf("install command is not shell-neutral: %s", tok.InstallCommand)
+	}
 	// The installer endpoint takes the token from a header only. No agent
 	// binary is published in tests, so a valid token yields 404.
 	if r, _ := http.Get(e.srv.URL + "/api/agent/v1/installer?token=" + tok.Token); r.StatusCode != 403 {

@@ -876,10 +876,15 @@ export interface NewEnrollmentToken {
   tags?: string[]
 }
 
-/** 建立回應：EnrollmentToken + 明文 token（只顯示一次）+ 伺服器組好的 PowerShell 安裝指令。 */
+/**
+ * 建立回應：EnrollmentToken + 明文 token（只顯示一次）+ 伺服器組好的單行安裝指令
+ * （-EncodedCommand，PowerShell 與命令提示字元皆可貼上）。內建 TLS 憑證未受系統信任
+ * （例如自簽）時，install_pin 為其 SHA-256 指紋，安裝指令已帶入。
+ */
 export interface CreatedEnrollmentToken extends EnrollmentToken {
   token: string
   install_command: string
+  install_pin: string
 }
 
 export interface NewUser {

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Installs or upgrades the NEXMIS Windows Agent.
 

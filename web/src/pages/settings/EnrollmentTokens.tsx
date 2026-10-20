@@ -144,6 +144,9 @@ function CreateTokenModal({ open, onClose, onCreated }: { open: boolean; onClose
 function CreatedTokenModal({ token, onClose }: { token: CreatedEnrollmentToken | null; onClose: () => void }) {
   const { data: general } = useQuery({ queryKey: qk.settings('general'), queryFn: settingsApi.getGeneral, enabled: !!token })
   const server = general?.server_url || window.location.origin
+  const pin = token?.install_pin
+  const gpoCommand = `powershell -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Server ${server} -Token ${token?.token}${pin ? ` -PinSHA256 ${pin}` : ''}`
+  const exeCommand = `nexmis-agent.exe install --server ${server} --token ${token?.token}${pin ? ` --pin ${pin}` : ''}`
   return (
     <Modal
       title="權杖已建立"
@@ -168,10 +171,25 @@ function CreatedTokenModal({ token, onClose }: { token: CreatedEnrollmentToken |
           {token.install_command ? (
             <>
               <Typography.Title level={5}>
-                安裝指令（PowerShell，以系統管理員執行）{' '}
+                安裝指令（PowerShell 或命令提示字元，以系統管理員執行）{' '}
                 <Typography.Text copyable={{ text: token.install_command }} />
               </Typography.Title>
               <OutputBlock label="" text={token.install_command} />
+              {pin ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  title={`伺服器憑證未受系統信任（例如自簽），以下指令皆已帶入憑證 SHA-256 指紋：${pin}`}
+                  style={{ marginBottom: 16 }}
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  title="若由反向代理以自簽憑證提供 HTTPS，伺服器無法得知該憑證，單行指令會因 TLS 驗證失敗；請改用 install-agent.ps1 並加上 -PinSHA256 <憑證 SHA-256 指紋>。"
+                  style={{ marginBottom: 16 }}
+                />
+              )}
             </>
           ) : (
             <Alert
@@ -182,13 +200,13 @@ function CreatedTokenModal({ token, onClose }: { token: CreatedEnrollmentToken |
             />
           )}
           <Typography.Title level={5}>
-            GPO 開機指令碼／Intune <Typography.Text copyable={{ text: `powershell -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Server ${server} -Token ${token.token}` }} />
+            GPO 開機指令碼／Intune <Typography.Text copyable={{ text: gpoCommand }} />
           </Typography.Title>
-          <OutputBlock label="" text={`powershell -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Server ${server} -Token ${token.token}`} />
+          <OutputBlock label="" text={gpoCommand} />
           <Typography.Title level={5}>
-            執行檔安裝 <Typography.Text copyable={{ text: `nexmis-agent.exe install --server ${server} --token ${token.token}` }} />
+            執行檔安裝 <Typography.Text copyable={{ text: exeCommand }} />
           </Typography.Title>
-          <OutputBlock label="" text={`nexmis-agent.exe install --server ${server} --token ${token.token}`} />
+          <OutputBlock label="" text={exeCommand} />
         </>
       )}
     </Modal>

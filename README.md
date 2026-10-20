@@ -39,7 +39,7 @@ docker compose up -d --build
 
 1. 「系統設定 → 一般」確認伺服器網址。
 2. 「系統設定 → Active Directory」設定 LDAPS 與唯讀服務帳號（選用）。
-3. 「系統設定 → 註冊權杖」建立權杖，複製單行安裝指令，在電腦上以系統管理員 PowerShell 執行；或以 GPO 開機指令碼執行 `install-agent.ps1` 大量部署。
+3. 「系統設定 → 註冊權杖」建立權杖，複製單行安裝指令，在電腦上以系統管理員 PowerShell 或命令提示字元執行；或以 GPO 開機指令碼執行 `install-agent.ps1` 大量部署。
 
 完整步驟請見 **[部署指南](docs/deployment.md)**。
 

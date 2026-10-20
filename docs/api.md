@@ -272,7 +272,7 @@ Cron 為標準 5 欄位（分 時 日 月 週），時區以伺服器設定的 `
 | POST | `/settings/agent-update/push` | 立即把發佈版本推送給所有在線 Agent（分散於數分鐘內）→ `202 {version, agents}`；未發佈或自動更新關閉時 `409`；寫入稽核 `agent.update.push` |
 | GET/PUT | `/settings/general` | `{ server_url, timezone, data_retention_days, battery_alert_percent, warranty_alert_days }` |
 | GET | `/enrollment-tokens` | |
-| POST | `/enrollment-tokens` | `{name, expires_at?, max_uses?, group_id?, tags?}` → 回傳 `EnrollmentToken` 加上 `token`（明文，只顯示一次）與 `install_command`（可直接貼到系統管理員 PowerShell 的單行安裝指令） |
+| POST | `/enrollment-tokens` | `{name, expires_at?, max_uses?, group_id?, tags?}` → 回傳 `EnrollmentToken` 加上 `token`（明文，只顯示一次）、`install_command`（`powershell -EncodedCommand` 單行安裝指令，可貼到系統管理員 PowerShell 或命令提示字元；伺服器網址非 https 時為空字串）與 `install_pin`（內建 TLS 憑證未受系統信任時的 SHA-256 指紋，已帶入指令；否則為空字串） |
 | DELETE | `/enrollment-tokens/{id}` | 撤銷 |
 | GET/POST | `/users` | |
 | PATCH/DELETE | `/users/{id}` | `{display_name, email, role, disabled, password?}` |

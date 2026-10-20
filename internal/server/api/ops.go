@@ -746,21 +746,6 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-// installCommand returns the one-line installer, or "" when the server URL
-// is not HTTPS: the download would be open to tampering and the agent
-// refuses cleartext servers anyway.
-func (s *Server) installCommand(token string) string {
-	base := strings.TrimRight(s.svc.General(context.Background()).ServerURL, "/")
-	if !strings.HasPrefix(base, "https://") {
-		return ""
-	}
-	return fmt.Sprintf(`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; `+
-		`[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; `+
-		`$p=Join-Path $env:TEMP 'nexmis-agent.exe'; `+
-		`Invoke-WebRequest -UseBasicParsing -Uri '%s/api/agent/v1/installer' -Headers @{'X-NEXMIS-Enroll-Token'='%s'} -OutFile $p; `+
-		`& $p install --server '%s' --token '%s'"`, base, token, base, token)
-}
-
 func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	var in store.EnrollmentToken
 	if !decode(w, r, &in) {
@@ -787,11 +772,13 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.svc.Audit(r.Context(), s.actor(r), "enrollment_token.create", "enrollment_token", in.ID.String(), in.Name,
 		map[string]any{"expires_at": in.ExpiresAt, "max_uses": in.MaxUses, "group_id": in.GroupID, "tags": in.Tags}, true)
+	cmd, pin := s.installCommand(token)
 	writeJSON(w, http.StatusCreated, struct {
 		store.EnrollmentToken
 		Token          string `json:"token"`
 		InstallCommand string `json:"install_command"`
-	}{in, token, s.installCommand(token)})
+		InstallPin     string `json:"install_pin"`
+	}{in, token, cmd, pin})
 }
 
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {

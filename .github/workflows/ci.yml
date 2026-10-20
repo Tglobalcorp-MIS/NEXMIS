@@ -31,6 +31,16 @@ jobs:
           go-version-file: go.mod
       - name: gofmt
         run: test -z "$(gofmt -l $(git ls-files '*.go'))" || { gofmt -l $(git ls-files '*.go'); exit 1; }
+      - name: PowerShell scripts are UTF-8 with BOM
+        # Windows PowerShell 5.1 misreads BOM-less UTF-8 as the ANSI code page.
+        run: |
+          bad=0
+          for f in $(git ls-files '*.ps1' '*.psm1' '*.psd1'); do
+            if [ "$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')" != efbbbf ]; then
+              echo "::error file=$f::must be saved as UTF-8 with BOM"; bad=1
+            fi
+          done
+          exit $bad
       - name: go vet
         run: |
           go vet ./...
@@ -55,6 +65,16 @@ jobs:
           go-version-file: go.mod
       - name: test (Windows-specific packages)
         run: go test -count=1 ./internal/agent/... ./internal/discovery/... ./internal/protocol/...
+      - name: PowerShell scripts parse in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($f in git ls-files '*.ps1' '*.psm1') {
+            $errs = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$errs)
+            foreach ($e in $errs) { Write-Host "::error file=$f,line=$($e.Extent.StartLineNumber)::$($e.Message)"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
 
   web:
     runs-on: ubuntu-latest
