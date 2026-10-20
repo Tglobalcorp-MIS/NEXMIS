@@ -1,0 +1,7 @@
+# PowerShell scripts must be saved as UTF-8 *with* BOM: Windows PowerShell
+# 5.1 reads a BOM-less file in the system ANSI code page (Big5 on zh-TW), so
+# the Chinese strings break parsing and GPO startup scripts fail. Git keeps
+# the BOM bytes as they are; CI rejects scripts without one.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf

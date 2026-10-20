@@ -3,8 +3,8 @@
 // Usage:
 //
 //	nexmis-agent install --server https://mis.corp.local --token nxe_xxx [--ca ca.pem] [--pin sha256]
-//	nexmis-agent uninstall
-//	nexmis-agent run              # foreground (development / troubleshooting)
+//	nexmis-agent uninstall [--purge] [--gui]
+//	nexmis-agent run             # foreground (development / troubleshooting)
 //	nexmis-agent status
 //	nexmis-agent collect          # print collected inventory as JSON
 //	nexmis-agent version
@@ -82,7 +82,7 @@ NEXMIS Agent `+Version+`
 
 用法：
   nexmis-agent install --server <URL> --token <註冊權杖> [--ca <CA 憑證 PEM 檔>] [--pin <憑證 SHA-256 指紋>]
-  nexmis-agent uninstall [--purge]
+  nexmis-agent uninstall [--purge] [--gui]
   nexmis-agent status
   nexmis-agent run          前景執行（除錯用）
   nexmis-agent collect      輸出本機收集到的資料（JSON）
@@ -134,6 +134,11 @@ func runAgent(asService bool) error {
 			return err
 		}
 		exe, _ := os.Executable()
+		if asService {
+			if err := registerUninstall(exe); err != nil {
+				log.Warn("register uninstall entry", "err", err)
+			}
+		}
 		a, err := agent.New(agent.Options{Version: Version, ServiceName: serviceName, DataDir: dataDir, ExePath: exe},
 			cfg, log, collect.New(), helperhost.New(log, exe))
 		if err != nil {
@@ -234,28 +239,104 @@ func install(args []string) error {
 	if err := winsvc.StartService(serviceName); err != nil {
 		return fmt.Errorf("啟動服務失敗：%w", err)
 	}
+	if err := registerUninstall(dst); err != nil {
+		fmt.Fprintln(os.Stderr, "警告：無法登錄「設定 → 應用程式」解除安裝項目：", err)
+	}
 	fmt.Println("NEXMIS Agent 已安裝並啟動，伺服器：", cfg.ServerURL)
 	return nil
 }
 
+// registerUninstall creates or refreshes the "Settings → Apps" entry for
+// the installed binary. The service also calls it at start, so the shown
+// version follows self-updates.
+func registerUninstall(exe string) error {
+	var size uint32
+	if fi, err := os.Stat(exe); err == nil {
+		size = uint32(fi.Size() / 1024)
+	}
+	return sys.RegisterUninstall(sys.UninstallEntry{
+		DisplayName:    displayName,
+		DisplayVersion: Version,
+		Publisher:      "NEXMIS",
+		ExePath:        exe,
+		SizeKB:         size,
+	})
+}
+
+// uninstall stops and removes the service, the "Settings → Apps" entry and
+// the program folder; with --purge also the configuration, identity, logs
+// and every user's helper data. With --gui (the entry's UninstallString)
+// it asks for elevation itself and shows the result in a dialog, because
+// Settings starts it unelevated in a console that closes on exit.
 func uninstall(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	purge := fs.Bool("purge", false, "一併刪除設定與身分（重新安裝時需新的註冊權杖）")
+	purge := fs.Bool("purge", false, "一併刪除設定、身分、記錄與各使用者資料（重新安裝時需新的註冊權杖）")
+	gui := fs.Bool("gui", false, "需要時要求提升權限，並以對話方塊顯示結果（供「設定 → 應用程式」使用）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *gui && runtime.GOOS == "windows" && !sys.IsElevated() {
+		code, err := sys.RunElevated(append([]string{"uninstall"}, args...))
+		if err != nil {
+			sys.ShowMessage(displayName, "未取得系統管理員權限，未移除 NEXMIS Agent。\n"+err.Error(), true)
+			return err
+		}
+		os.Exit(code)
+	}
+
+	var r sys.UninstallReport
 	if winsvc.ServiceExists(serviceName) {
 		_ = winsvc.StopService(serviceName, 30*time.Second)
+	}
+	// The helpers run in users' sessions; the stopped service no longer
+	// restarts them.
+	if n := sys.StopAgentProcesses(sys.InstallDir()); n > 0 {
+		r.Ok(fmt.Sprintf("已結束 %d 個 Agent／使用者輔助程式", n))
+	}
+	if winsvc.ServiceExists(serviceName) {
 		if err := winsvc.RemoveService(serviceName); err != nil {
-			return err
+			r.Fail("刪除服務 "+serviceName, err)
+		} else {
+			r.Ok("已刪除服務 " + serviceName)
 		}
+	}
+	if err := sys.UnregisterUninstall(); err != nil {
+		r.Fail("刪除「設定 → 應用程式」項目", err)
+	} else {
+		r.Ok("已刪除「設定 → 應用程式」項目")
 	}
 	if *purge {
-		if err := os.RemoveAll(sys.DataDir()); err != nil {
-			return err
+		if err := sys.RemoveMachineFiles(); err != nil {
+			r.Fail("刪除設定與記錄", err)
+		} else {
+			r.Ok("已刪除設定、身分與記錄（" + filepath.Dir(sys.DataDir()) + "）")
+		}
+		if n, err := sys.RemoveUserData(); err != nil {
+			r.Fail("刪除使用者資料", err)
+		} else if n > 0 {
+			r.Ok(fmt.Sprintf("已刪除 %d 位使用者的 NEXMIS 資料", n))
 		}
 	}
-	fmt.Println("NEXMIS Agent 已移除。程式檔位於", sys.InstallDir(), "，可手動刪除。")
+	if runtime.GOOS == "windows" {
+		if err := sys.ScheduleRemoveInstallDir(sys.InstallDir()); err != nil {
+			r.Fail("刪除程式資料夾 "+sys.InstallDir()+"（已排定重新開機時刪除）", err)
+		} else {
+			r.Ok("程式資料夾 " + sys.InstallDir() + " 將於數秒後刪除")
+		}
+	}
+
+	title := "NEXMIS Agent 已移除"
+	if len(r.Problems) > 0 {
+		title = "NEXMIS Agent 移除未完全成功"
+	}
+	fmt.Println(title)
+	fmt.Println(r.String())
+	if *gui {
+		sys.ShowMessage(displayName, title+"\n\n"+r.String(), len(r.Problems) > 0)
+	}
+	if len(r.Problems) > 0 {
+		return errors.New(title)
+	}
 	return nil
 }
 

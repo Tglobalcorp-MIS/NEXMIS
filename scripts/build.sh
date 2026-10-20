@@ -42,6 +42,12 @@ for arch in amd64 arm64; do
   size="$(stat -c %s "${OUT}/agent/${file}")"
   builds+=("\"windows/${arch}\": {\"file\": \"${file}\", \"sha256\": \"${sha}\", \"size\": ${size}}")
 done
+# install-agent.ps1 must keep its UTF-8 BOM: Windows PowerShell 5.1 reads a
+# BOM-less script in the ANSI code page and fails on the Chinese messages.
+if [[ "$(head -c3 deploy/agent/install-agent.ps1 | od -An -tx1 | tr -d ' \n')" != efbbbf ]]; then
+  echo "deploy/agent/install-agent.ps1 must be saved as UTF-8 with BOM" >&2
+  exit 1
+fi
 cp deploy/agent/install-agent.ps1 "${OUT}/agent/"
 cp -r deploy/linux "${OUT}/linux"
 

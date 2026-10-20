@@ -161,7 +161,9 @@ New-ADUser -Name 'svc-nexmis' -SamAccountName 'svc-nexmis' -Path 'OU=Service Acc
 
 ### 7.2 單台安裝
 
-複製權杖畫面上的單行指令，在目標電腦以**系統管理員 PowerShell** 執行。
+複製權杖畫面上的單行指令，在目標電腦以**系統管理員**身分的 PowerShell 或命令提示字元執行（指令以 `-EncodedCommand` 傳遞，兩者皆可直接貼上）。
+
+伺服器以內建 TLS（`NEXMIS_TLS_CERT`）提供未受系統信任的憑證（例如自簽）時，單行指令會自動帶入該憑證的 SHA-256 指紋：下載安裝檔時以指紋驗證伺服器，並以 `--pin` 傳給 Agent；畫面同時顯示指紋。由反向代理提供自簽憑證時伺服器無法得知該憑證，請改用 `install-agent.ps1 -PinSHA256 <指紋>`。
 
 ### 7.3 GPO 大量部署（網域電腦）
 
@@ -171,6 +173,8 @@ New-ADUser -Name 'svc-nexmis' -SamAccountName 'svc-nexmis' -Path 'OU=Service Acc
    - 參數：`-Server https://mis.corp.local -Token nxe_xxxxx -AgentPath \\corp.local\NETLOGON\nexmis\nexmis-agent-windows-amd64.exe`
 3. 連結到目標 OU。電腦下次開機即安裝；已安裝者會略過重新註冊，只更新執行檔與服務設定。
 4. 安裝記錄：`C:\ProgramData\NEXMIS\install.log`。
+
+`install-agent.ps1` 必須保持 **UTF-8（含 BOM）** 編碼；以編輯器修改後若存成無 BOM 的 UTF-8，繁中 Windows PowerShell 5.1 會以 Big5 讀取而解析失敗。
 
 ### 7.4 非網域電腦（Windows 家用版等）
 
@@ -194,8 +198,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-agent.ps1 -Serve
 | 設定與身分金鑰（DPAPI 加密） | `C:\ProgramData\NEXMIS\Agent\` |
 | 日誌 | `C:\ProgramData\NEXMIS\Agent\logs\agent.log` |
 | 服務 | `NexmisAgent`（LocalSystem，自動啟動，失敗自動重啟） |
+| 安裝記錄（install-agent.ps1） | `C:\ProgramData\NEXMIS\install.log` |
+| 使用者輔助程式記錄 | 各使用者 `%LOCALAPPDATA%\NEXMIS\helper.log` |
+| 解除安裝項目 | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\NEXMIS Agent`（「設定 → 應用程式」） |
 
-本機指令：`nexmis-agent status`、`nexmis-agent collect`（輸出收集資料，除錯用）、`nexmis-agent uninstall [--purge]`。
+本機指令（以系統管理員執行）：
+
+- `nexmis-agent status`：顯示版本、伺服器、註冊狀態。
+- `nexmis-agent collect`：輸出收集資料（除錯用）。
+- `nexmis-agent uninstall`：停止並刪除服務、結束各工作階段的使用者輔助程式、刪除「設定 → 應用程式」項目與程式資料夾（執行中的程式無法刪除自己，資料夾於指令結束數秒後刪除；未能刪除者排定重新開機時刪除）。保留設定與身分，可直接重新安裝。
+- `nexmis-agent uninstall --purge`：另外刪除 `C:\ProgramData\NEXMIS\Agent`、`install.log`、各使用者的 `%LOCALAPPDATA%\NEXMIS`；重新安裝需新的註冊權杖。完成後逐項列出清除結果，有失敗項目時結束代碼為 1。
+
+安裝時會登錄「設定 → 應用程式」項目（服務每次啟動時更新版本號，因此自動更新後版本也會正確）。從「設定」解除安裝時執行 `nexmis-agent.exe uninstall --purge --gui`：會跳出 UAC 要求系統管理員權限（一般使用者無法移除；服務也只有 Administrators 能停止與刪除），完成後以對話方塊顯示清除結果。
+
+目前移除時不會通知伺服器，管理端會把該裝置顯示為「離線」；請在管理端自行刪除該裝置。
 
 ## 8. 上線檢查清單
 
