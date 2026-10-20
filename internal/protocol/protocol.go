@@ -51,6 +51,11 @@ const (
 
 	// Configuration
 	TConfig = "config" // server -> agent
+	// TConfigRequest asks the server to send the current configuration
+	// (agent -> server); the reply is a TConfig with ref = the request id.
+	// Agents send it periodically to check for updates. Servers that do not
+	// know it ignore it.
+	TConfigRequest = "config.request"
 
 	// Keepalive
 	TPing = "ping"
@@ -145,6 +150,10 @@ type AgentConfig struct {
 	ConsentTimeout  int    `json:"consent_timeout_sec"`
 	RebootCountdown int    `json:"reboot_countdown_sec"`
 	RebootMaxDefer  int    `json:"reboot_max_defer"`
+	// UpdateCheckSec is how often a connected agent asks for the current
+	// configuration (TConfigRequest) to pick up a new LatestAgent even when
+	// a push was missed. Older agents ignore it.
+	UpdateCheckSec int `json:"update_check_sec,omitempty"`
 	// LatestAgent is the agent version the server wants running; builds
 	// are keyed by "GOOS/GOARCH". Agents older than LatestAgent update
 	// themselves from the matching build.
@@ -171,7 +180,14 @@ func DefaultAgentConfig() AgentConfig {
 		ConsentTimeout:  60,
 		RebootCountdown: 300,
 		RebootMaxDefer:  3,
+		UpdateCheckSec:  6 * 3600,
 	}
+}
+
+// ConfigRequest is the payload of TConfigRequest.
+type ConfigRequest struct {
+	Reason       string `json:"reason,omitempty"` // update_check
+	AgentVersion string `json:"agent_version"`
 }
 
 const (

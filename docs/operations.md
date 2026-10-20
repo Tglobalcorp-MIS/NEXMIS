@@ -64,8 +64,17 @@ docker compose start server
    systemd：以新版 `dist/` 重新執行 `install.sh`，然後 `systemctl restart nexmis-server`。
    Windows：停止服務 → 覆蓋執行檔與 `agent\` 資料夾 → 啟動服務。
 3. 資料庫結構於啟動時自動升級（具備鎖定，多實例同時啟動也安全）。結構升級只會前進，降版請以備份還原。
-4. 新版 Agent 隨伺服器發佈；`manifest.json` 的 `auto_update` 為 `true` 時，在線的 Agent 會自動下載、驗證 SHA-256 並更新。若要分批更新，可先將 `auto_update` 設為 `false`，再對特定裝置或群組派送「更新 Agent」指令（更新至伺服器目前發佈的版本）。
-5. 升級後至「系統設定 → 系統資訊」確認版本，並抽查數台 Agent 版本。
+4. 新版 Agent 隨伺服器發佈（`agent\manifest.json` 與執行檔）。自動更新開啟時，在線的 Agent 會自動下載、驗證 SHA-256 並替換重啟，流程如下：
+   - 伺服器每分鐘檢查 `manifest.json`；版本、任一執行檔雜湊或自動更新開關改變時，主動把新設定推送給所有在線 Agent。推送以每台約 2 秒分散，整批最長 10 分鐘；Agent 收到後再隨機等待 10 秒～5 分鐘才開始下載，避免數百台同時下載。
+   - 離線的 Agent 於下次連線時取得新版本；長時間保持連線的 Agent 另會每隔「檢查 Agent 更新」間隔（預設 6 小時，可在「系統設定 → Agent 設定」調整，最短 1 小時）向伺服器要一次最新設定。
+   - 失敗時（下載中斷、雜湊不符、檔案鎖定）Agent 以 5 分鐘起、最長 1 小時的退避重試；伺服器撤回版本或關閉自動更新後，尚未開始的更新會取消。
+   - Agent 紀錄（`C:\ProgramData\NEXMIS\Agent\logs\agent.log`）依序可見 `agent update available`、`downloading agent update`、`agent update verified`、`installing agent update`；失敗為 `self-update failed` 並附原因。伺服器紀錄可見 `new agent release detected`、`pushing agent configuration`。
+5. 「系統設定 → Agent 設定 → Agent 版本與自動更新」：
+   - 顯示發佈版本、各版本裝置數（已是最新／待更新／離線／無法比較）與上次推送時間。
+   - 「自動更新」可選「沿用 manifest」「開啟」「關閉」。選開啟或關閉後以資料庫設定為準，`manifest.json` 的 `auto_update` 不再生效，直到改回「沿用 manifest」。
+   - 「立即推送更新」（admin）立刻對在線 Agent 重新推送（同樣分散時間），並寫入稽核 `agent.update.push`。
+   - 要分批更新時，先把自動更新設為「關閉」，再對特定裝置或群組派送「更新 Agent」指令（更新至伺服器目前發佈的版本），確認無誤後再開啟。
+6. 升級後至「系統設定 → 系統資訊」確認伺服器版本，並在上述面板確認「待更新」逐漸歸零。
 
 ## 5. 日常監控
 
